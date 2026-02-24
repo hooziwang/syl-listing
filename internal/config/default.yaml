@@ -1,0 +1,25 @@
+provider: openai
+api_key_env: SYL_LISTING_API_KEY
+rules_dir: ~/.syl-listing/rules
+concurrency: 0
+max_retries: 3
+request_timeout_sec: 300
+output:
+  dir: .
+  num: 1
+providers:
+  openai:
+    base_url: https://flux-code.cc
+    api_mode: responses
+    model: gpt-5.3-codex
+    model_reasoning_effort: high
+  gemini:
+    base_url: https://generativelanguage.googleapis.com
+    api_mode: gemini
+    model: gemini-2.5-pro
+    model_reasoning_effort: high
+  claude:
+    base_url: https://api.anthropic.com
+    api_mode: claude
+    model: claude-sonnet-4-20250514
+    model_reasoning_effort: high
