@@ -8,31 +8,9 @@ request_timeout_sec: 300
 output:
   dir: .
   num: 1
-translation:
-  provider: deepseek
-  base_url: https://api.deepseek.com
-  model: deepseek-chat
-  api_key_env: DEEPSEEK_API_KEY
-  source: en
-  target: zh
 providers:
   deepseek:
     base_url: https://api.deepseek.com
     api_mode: chat
     model: deepseek-chat
     model_reasoning_effort: ""
-  openai:
-    base_url: https://flux-code.cc
-    api_mode: responses
-    model: gpt-5.3-codex
-    model_reasoning_effort: high
-  gemini:
-    base_url: https://generativelanguage.googleapis.com
-    api_mode: gemini
-    model: gemini-2.5-pro
-    model_reasoning_effort: high
-  claude:
-    base_url: https://api.anthropic.com
-    api_mode: claude
-    model: claude-sonnet-4-20250514
-    model_reasoning_effort: high

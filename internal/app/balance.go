@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"syl-listing/internal/config"
 )
 
 const deepSeekBalanceURL = "https://api.deepseek.com/user/balance"
@@ -29,16 +27,9 @@ type deepSeekBalanceInfo struct {
 	ToppedUp      any `json:"topped_up_balance"`
 }
 
-func resolveDeepSeekBalanceKey(cfg *config.Config, envMap map[string]string, apiKey, translateAPIKey string) string {
-	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Provider), "deepseek") {
-		if key := strings.TrimSpace(apiKey); key != "" {
-			return key
-		}
-	}
-	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Translation.Provider), "deepseek") {
-		if key := strings.TrimSpace(translateAPIKey); key != "" {
-			return key
-		}
+func resolveDeepSeekBalanceKey(envMap map[string]string, apiKey string) string {
+	if key := strings.TrimSpace(apiKey); key != "" {
+		return key
 	}
 	if envMap != nil {
 		if key := strings.TrimSpace(envMap["DEEPSEEK_API_KEY"]); key != "" {

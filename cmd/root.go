@@ -75,7 +75,7 @@ func bindGenFlags(cmd *cobra.Command, flags *genFlags) {
 	cmd.PersistentFlags().IntVarP(&flags.numArg, "num", "n", 0, "每个需求文件生成候选数量")
 	cmd.PersistentFlags().IntVar(&flags.concurrencyArg, "concurrency", 0, "保留参数（当前版本不限制并发）")
 	cmd.PersistentFlags().IntVar(&flags.maxRetriesArg, "max-retries", 0, "最大重试次数")
-	cmd.PersistentFlags().StringVar(&flags.providerArg, "provider", "", "覆盖配置中的 provider")
+	cmd.PersistentFlags().StringVar(&flags.providerArg, "provider", "", "覆盖配置中的 provider（当前仅支持 deepseek）")
 	cmd.PersistentFlags().StringVar(&flags.logFileArg, "log-file", "", "NDJSON 日志文件路径")
 	cmd.PersistentFlags().BoolVar(&flags.verboseArg, "verbose", false, "输出详细 NDJSON（机器友好）")
 }

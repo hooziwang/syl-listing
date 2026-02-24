@@ -124,18 +124,11 @@ syl-listing gen ./requirements -n 2
 
 ## .env 必填项
 
-实际读取哪个变量名由配置控制（`api_key_env`、`translation.api_key_env` 等）。常见写法：
+实际读取变量名由 `api_key_env` 控制，默认只需要：
 
 ```dotenv
-# DeepSeek（默认生成/默认翻译）
+# DeepSeek（英文生成 + 中文翻译都使用该 key）
 DEEPSEEK_API_KEY=
-
-# OpenAI（当 provider=openai 且 api_key_env=OPENAI_API_KEY 时）
-OPENAI_API_KEY=
-
-# 腾讯翻译（当 translation.provider=tencent_tmt 时）
-TENCENTCLOUD_SECRET_ID=
-TENCENTCLOUD_SECRET_KEY=
 ```
 
 ## 规则文件（分段 + 结构化）
@@ -219,27 +212,15 @@ request_timeout_sec: 300
 output:
   dir: .
   num: 1
-translation:
-  provider: deepseek
-  base_url: https://api.deepseek.com
-  model: deepseek-chat
-  api_key_env: DEEPSEEK_API_KEY
-  source: en
-  target: zh
 providers:
   deepseek:
     base_url: https://api.deepseek.com
     api_mode: chat
     model: deepseek-chat
     model_reasoning_effort: ""
-  openai:
-    base_url: https://flux-code.cc
-    api_mode: responses
-    model: gpt-5.3-codex
-    model_reasoning_effort: high
 ```
 
-翻译配置可在 `translation` 节点覆盖；当前支持 `tencent_tmt` 和 `deepseek`。
+翻译固定使用 `providers.deepseek`（与生成共享同一 DeepSeek 配置与 key）。
 `char_tolerance` 用于字符数校验容差（默认 20）：若规则只有 `max`，则放宽为 `(-inf,max+20]`；若规则同时有 `min/max`，则放宽为 `[min-20,max+20]`。
 
 ## 校验与容差
@@ -264,7 +245,7 @@ providers:
 -n, --num       每个需求文件生成候选数量
 --concurrency   保留参数（当前版本不限制并发，传入值不生效）
 --max-retries   最大重试次数
---provider      覆盖配置中的 provider
+--provider      覆盖配置中的 provider（当前仅支持 deepseek）
 --verbose       终端输出详细 NDJSON（机器友好）
 --log-file      NDJSON 日志文件路径
 -v, --version   版本
@@ -281,7 +262,7 @@ providers:
 - 生成慢或超时：
   降低 `max_retries`，调整 `request_timeout_sec`，或切换更快模型。
 - 翻译失败：
-  检查 `translation.provider` 与对应密钥是否匹配（DeepSeek 或 Tencent）。
+  检查 `providers.deepseek` 与 `DEEPSEEK_API_KEY` 是否正确。
 
 ## 退出码与自动化集成
 

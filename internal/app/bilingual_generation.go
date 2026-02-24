@@ -16,21 +16,18 @@ import (
 )
 
 type bilingualGenerateOptions struct {
-	Req             listing.Requirement
-	CharTolerance   int
-	Provider        string
-	ProviderCfg     config.ProviderConfig
-	Translation     config.TranslationConfig
-	APIKey          string
-	TranslateAPIKey string
-	TranslateSID    string
-	TranslateSK     string
-	Rules           config.SectionRules
-	MaxRetries      int
-	Client          *llm.Client
-	TranslateClient *translator.Client
-	Logger          *logging.Logger
-	Candidate       int
+	Req                  listing.Requirement
+	CharTolerance        int
+	Provider             string
+	ProviderCfg          config.ProviderConfig
+	TranslateProviderCfg config.ProviderConfig
+	APIKey               string
+	Rules                config.SectionRules
+	MaxRetries           int
+	Client               *llm.Client
+	TranslateClient      *translator.Client
+	Logger               *logging.Logger
+	Candidate            int
 }
 
 func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingDocument, ListingDocument, int64, int64, error) {
@@ -68,17 +65,15 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		go func() {
 			defer translateWG.Done()
 			translated, _, err := translateSectionWithRetry(translateSectionOptions{
-				Req:         opts.Req,
-				Section:     section,
-				SourceText:  sourceText,
-				Translation: opts.Translation,
-				APIKey:      opts.TranslateAPIKey,
-				SecretID:    opts.TranslateSID,
-				SecretKey:   opts.TranslateSK,
-				MaxRetries:  opts.MaxRetries,
-				Client:      opts.TranslateClient,
-				Logger:      opts.Logger,
-				Candidate:   opts.Candidate,
+				Req:                  opts.Req,
+				Section:              section,
+				SourceText:           sourceText,
+				TranslateProviderCfg: opts.TranslateProviderCfg,
+				APIKey:               opts.APIKey,
+				MaxRetries:           opts.MaxRetries,
+				Client:               opts.TranslateClient,
+				Logger:               opts.Logger,
+				Candidate:            opts.Candidate,
 			})
 			if err != nil {
 				recordTranslateErr(err)
@@ -87,48 +82,15 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 			onSuccess(strings.TrimSpace(translated))
 		}()
 	}
-	scheduleTranslateBatch := func(section string, sourceTexts []string, onSuccess func([]string)) {
-		translateWG.Add(1)
-		go func() {
-			defer translateWG.Done()
-			translated, _, err := translateSectionsBatchWithRetry(translateBatchOptions{
-				Req:         opts.Req,
-				Section:     section,
-				SourceTexts: sourceTexts,
-				Translation: opts.Translation,
-				APIKey:      opts.TranslateAPIKey,
-				SecretID:    opts.TranslateSID,
-				SecretKey:   opts.TranslateSK,
-				MaxRetries:  opts.MaxRetries,
-				Client:      opts.TranslateClient,
-				Logger:      opts.Logger,
-				Candidate:   opts.Candidate,
-			})
-			if err != nil {
-				recordTranslateErr(err)
-				return
-			}
-			onSuccess(translated)
-		}()
-	}
-
 	scheduleTranslate("category", strings.TrimSpace(opts.Req.Category), func(v string) {
 		cnDoc.Category = cleanCategoryLine(v)
 	})
-	if isBatchTranslationProvider(opts.Translation.Provider) {
-		scheduleTranslateBatch("keywords", opts.Req.Keywords, func(items []string) {
-			for i := range cnKeywords {
-				cnKeywords[i] = cleanKeywordLine(items[i])
-			}
+	for i, kw := range opts.Req.Keywords {
+		idx := i
+		src := kw
+		scheduleTranslate(fmt.Sprintf("keyword_%d", i+1), src, func(v string) {
+			cnKeywords[idx] = cleanKeywordLine(v)
 		})
-	} else {
-		for i, kw := range opts.Req.Keywords {
-			idx := i
-			src := kw
-			scheduleTranslate(fmt.Sprintf("keyword_%d", i+1), src, func(v string) {
-				cnKeywords[idx] = cleanKeywordLine(v)
-			})
-		}
 	}
 
 	enSectionOpts := sectionGenerateOptions{
@@ -178,20 +140,12 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		enBullets = items
 	}
 	enDoc.BulletPoints = enBullets
-	if isBatchTranslationProvider(opts.Translation.Provider) {
-		scheduleTranslateBatch("bullets", enBullets, func(items []string) {
-			for i := range cnBullets {
-				cnBullets[i] = strings.TrimSpace(items[i])
-			}
+	for i, bp := range enBullets {
+		idx := i
+		text := bp
+		scheduleTranslate(fmt.Sprintf("bullet_%d", i+1), text, func(v string) {
+			cnBullets[idx] = strings.TrimSpace(v)
 		})
-	} else {
-		for i, bp := range enBullets {
-			idx := i
-			text := bp
-			scheduleTranslate(fmt.Sprintf("bullet_%d", i+1), text, func(v string) {
-				cnBullets[idx] = strings.TrimSpace(v)
-			})
-		}
 	}
 
 	descText, latency, err := generateSectionWithRetry(enSectionOpts, "description", enDoc)
@@ -204,20 +158,12 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	enDoc.DescriptionParagraphs = enDesc
-	if isBatchTranslationProvider(opts.Translation.Provider) {
-		scheduleTranslateBatch("description", enDesc, func(items []string) {
-			for i := range cnDesc {
-				cnDesc[i] = strings.TrimSpace(items[i])
-			}
+	for i, p := range enDesc {
+		idx := i
+		text := p
+		scheduleTranslate(fmt.Sprintf("description_%d", i+1), text, func(v string) {
+			cnDesc[idx] = strings.TrimSpace(v)
 		})
-	} else {
-		for i, p := range enDesc {
-			idx := i
-			text := p
-			scheduleTranslate(fmt.Sprintf("description_%d", i+1), text, func(v string) {
-				cnDesc[idx] = strings.TrimSpace(v)
-			})
-		}
 	}
 
 	search, latency, err := generateSectionWithRetry(enSectionOpts, "search_terms", enDoc)
@@ -271,31 +217,15 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 }
 
 type translateSectionOptions struct {
-	Req         listing.Requirement
-	Section     string
-	SourceText  string
-	Translation config.TranslationConfig
-	APIKey      string
-	SecretID    string
-	SecretKey   string
-	MaxRetries  int
-	Client      *translator.Client
-	Logger      *logging.Logger
-	Candidate   int
-}
-
-type translateBatchOptions struct {
-	Req         listing.Requirement
-	Section     string
-	SourceTexts []string
-	Translation config.TranslationConfig
-	APIKey      string
-	SecretID    string
-	SecretKey   string
-	MaxRetries  int
-	Client      *translator.Client
-	Logger      *logging.Logger
-	Candidate   int
+	Req                  listing.Requirement
+	Section              string
+	SourceText           string
+	TranslateProviderCfg config.ProviderConfig
+	APIKey               string
+	MaxRetries           int
+	Client               *translator.Client
+	Logger               *logging.Logger
+	Candidate            int
 }
 
 func translateSectionWithRetry(opts translateSectionOptions) (string, int64, error) {
@@ -327,9 +257,9 @@ func translateSectionWithRetry(opts translateSectionOptions) (string, int64, err
 			Input:     opts.Req.SourcePath,
 			Candidate: opts.Candidate,
 			Lang:      "cn",
-			Provider:  opts.Translation.Provider,
-			Model:     opts.Translation.Model,
-			BaseURL:   opts.Translation.BaseURL,
+			Provider:  "deepseek",
+			Model:     opts.TranslateProviderCfg.Model,
+			BaseURL:   opts.TranslateProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
 		if opts.Logger.Verbose() {
@@ -337,16 +267,12 @@ func translateSectionWithRetry(opts translateSectionOptions) (string, int64, err
 		}
 		opts.Logger.Emit(reqEvent)
 		resp, err := opts.Client.Translate(context.Background(), translator.Request{
-			Provider:   opts.Translation.Provider,
-			Endpoint:   opts.Translation.BaseURL,
-			Model:      opts.Translation.Model,
+			Provider:   "deepseek",
+			Endpoint:   opts.TranslateProviderCfg.BaseURL,
+			Model:      opts.TranslateProviderCfg.Model,
 			APIKey:     opts.APIKey,
-			SecretID:   opts.SecretID,
-			SecretKey:  opts.SecretKey,
-			Region:     opts.Translation.Region,
-			Source:     opts.Translation.Source,
-			Target:     opts.Translation.Target,
-			ProjectID:  opts.Translation.ProjectID,
+			Source:     "en",
+			Target:     "zh",
 			UserPrompt: opts.SourceText,
 		})
 		if err != nil {
@@ -365,8 +291,8 @@ func translateSectionWithRetry(opts translateSectionOptions) (string, int64, err
 			Input:     opts.Req.SourcePath,
 			Candidate: opts.Candidate,
 			Lang:      "cn",
-			Provider:  opts.Translation.Provider,
-			Model:     opts.Translation.Model,
+			Provider:  "deepseek",
+			Model:     opts.TranslateProviderCfg.Model,
 			LatencyMS: resp.LatencyMS,
 			Attempt:   attempt,
 		}
@@ -385,114 +311,4 @@ func translateSectionWithRetry(opts translateSectionOptions) (string, int64, err
 		return "", 0, fmt.Errorf("%s 翻译重试后仍失败：%s", opts.Section, lastIssues)
 	}
 	return outText, outLatency, nil
-}
-
-func translateSectionsBatchWithRetry(opts translateBatchOptions) ([]string, int64, error) {
-	var (
-		outTexts   []string
-		outLatency int64
-	)
-	lastIssues := ""
-	err := withExponentialBackoff(retryOptions{
-		MaxRetries: opts.MaxRetries,
-		BaseDelay:  500 * time.Millisecond,
-		MaxDelay:   8 * time.Second,
-		Jitter:     0.25,
-		OnRetry: func(attempt int, wait time.Duration, err error) {
-			opts.Logger.Emit(logging.Event{
-				Level:     "warn",
-				Event:     "retry_backoff_translate_" + opts.Section + "_batch",
-				Input:     opts.Req.SourcePath,
-				Candidate: opts.Candidate,
-				Lang:      "cn",
-				Attempt:   attempt,
-				WaitMS:    wait.Milliseconds(),
-				Error:     err.Error(),
-			})
-		},
-	}, func(attempt int) error {
-		reqEvent := logging.Event{
-			Event:     "api_request_translate_" + opts.Section + "_batch",
-			Input:     opts.Req.SourcePath,
-			Candidate: opts.Candidate,
-			Lang:      "cn",
-			Provider:  opts.Translation.Provider,
-			Model:     opts.Translation.Model,
-			BaseURL:   opts.Translation.BaseURL,
-			Attempt:   attempt,
-		}
-		if opts.Logger.Verbose() {
-			reqEvent.SourceTexts = append([]string{}, opts.SourceTexts...)
-		}
-		opts.Logger.Emit(reqEvent)
-		resp, err := opts.Client.TranslateBatch(context.Background(), translator.Request{
-			Provider:  opts.Translation.Provider,
-			Endpoint:  opts.Translation.BaseURL,
-			Model:     opts.Translation.Model,
-			APIKey:    opts.APIKey,
-			SecretID:  opts.SecretID,
-			SecretKey: opts.SecretKey,
-			Region:    opts.Translation.Region,
-			Source:    opts.Translation.Source,
-			Target:    opts.Translation.Target,
-			ProjectID: opts.Translation.ProjectID,
-		}, opts.SourceTexts)
-		if err != nil {
-			lastIssues = "- 批量翻译请求失败: " + err.Error()
-			opts.Logger.Emit(logging.Event{
-				Level:     "warn",
-				Event:     "api_error_translate_" + opts.Section + "_batch",
-				Input:     opts.Req.SourcePath,
-				Candidate: opts.Candidate,
-				Lang:      "cn",
-				Attempt:   attempt,
-				Error:     err.Error(),
-			})
-			return errors.New(lastIssues)
-		}
-		if len(resp.Texts) != len(opts.SourceTexts) {
-			lastIssues = fmt.Sprintf("- 批量翻译返回数量不匹配：%d != %d", len(resp.Texts), len(opts.SourceTexts))
-			return errors.New(lastIssues)
-		}
-		for i, text := range resp.Texts {
-			if strings.TrimSpace(text) == "" {
-				lastIssues = fmt.Sprintf("- 批量翻译第%d项为空", i+1)
-				return errors.New(lastIssues)
-			}
-		}
-		outTexts = make([]string, len(resp.Texts))
-		copy(outTexts, resp.Texts)
-		outLatency = resp.LatencyMS
-		respEvent := logging.Event{
-			Event:     "api_response_translate_" + opts.Section + "_batch",
-			Input:     opts.Req.SourcePath,
-			Candidate: opts.Candidate,
-			Lang:      "cn",
-			Provider:  opts.Translation.Provider,
-			Model:     opts.Translation.Model,
-			LatencyMS: resp.LatencyMS,
-			Attempt:   attempt,
-		}
-		if opts.Logger.Verbose() {
-			respEvent.ResponseTexts = append([]string{}, resp.Texts...)
-		}
-		opts.Logger.Emit(respEvent)
-		return nil
-	})
-	if err != nil {
-		if strings.TrimSpace(lastIssues) == "" {
-			lastIssues = err.Error()
-		}
-		return nil, 0, fmt.Errorf("%s 批量翻译重试后仍失败：%s", opts.Section, lastIssues)
-	}
-	return outTexts, outLatency, nil
-}
-
-func isBatchTranslationProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "tencent", "tencent_tmt":
-		return true
-	default:
-		return false
-	}
 }

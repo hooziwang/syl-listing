@@ -82,26 +82,9 @@ func Run(opts Options) (result Result, err error) {
 	if apiKey == "" {
 		return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.APIKeyEnv, paths.EnvExample, paths.EnvPath)
 	}
-	translateAPIKey := strings.TrimSpace(envMap[cfg.Translation.APIKeyEnv])
-	translateSecretID := strings.TrimSpace(envMap[cfg.Translation.SecretIDEnv])
-	translateSecretKey := strings.TrimSpace(envMap[cfg.Translation.SecretKeyEnv])
-	switch strings.ToLower(strings.TrimSpace(cfg.Translation.Provider)) {
-	case "tencent_tmt", "tencent":
-		if translateSecretID == "" {
-			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.SecretIDEnv, paths.EnvExample, paths.EnvPath)
-		}
-		if translateSecretKey == "" {
-			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.SecretKeyEnv, paths.EnvExample, paths.EnvPath)
-		}
-	case "deepseek":
-		if strings.TrimSpace(cfg.Translation.APIKeyEnv) == "" {
-			translateAPIKey = apiKey
-		}
-		if translateAPIKey == "" {
-			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.APIKeyEnv, paths.EnvExample, paths.EnvPath)
-		}
-	default:
-		return Result{}, fmt.Errorf("翻译 provider 仅支持 tencent_tmt/deepseek，当前：%s", cfg.Translation.Provider)
+	translateProviderCfg, ok := cfg.Providers["deepseek"]
+	if !ok {
+		return Result{}, fmt.Errorf("配置中不存在 provider：deepseek（中文翻译固定使用 providers.deepseek）")
 	}
 
 	logger, closer, err := logging.New(opts.Stdout, opts.LogFile, opts.Verbose, cfg.Output.Num > 1)
@@ -111,7 +94,7 @@ func Run(opts Options) (result Result, err error) {
 	if closer != nil {
 		defer closer.Close()
 	}
-	balanceAPIKey := resolveDeepSeekBalanceKey(cfg, envMap, apiKey, translateAPIKey)
+	balanceAPIKey := resolveDeepSeekBalanceKey(envMap, apiKey)
 	defer func() {
 		balance, fetchErr := fetchDeepSeekBalanceWithRetry(balanceAPIKey, cfg.MaxRetries)
 		if fetchErr != nil {
@@ -195,21 +178,18 @@ func Run(opts Options) (result Result, err error) {
 				go func(j candidateJob) {
 					defer wg.Done()
 					ok := processCandidate(processCandidateOptions{
-						Job:             j,
-						OutDir:          outDir,
-						CharTolerance:   cfg.CharTolerance,
-						Provider:        cfg.Provider,
-						ProviderCfg:     providerCfg,
-						Translation:     cfg.Translation,
-						APIKey:          apiKey,
-						TranslateAPIKey: translateAPIKey,
-						TranslateSID:    translateSecretID,
-						TranslateSK:     translateSecretKey,
-						Rules:           rules,
-						MaxRetries:      cfg.MaxRetries,
-						Client:          client,
-						TranslateClient: translateClient,
-						Logger:          logger,
+						Job:                  j,
+						OutDir:               outDir,
+						CharTolerance:        cfg.CharTolerance,
+						Provider:             cfg.Provider,
+						ProviderCfg:          providerCfg,
+						TranslateProviderCfg: translateProviderCfg,
+						APIKey:               apiKey,
+						Rules:                rules,
+						MaxRetries:           cfg.MaxRetries,
+						Client:               client,
+						TranslateClient:      translateClient,
+						Logger:               logger,
 					})
 					results <- ok
 				}(job)
@@ -232,21 +212,18 @@ func Run(opts Options) (result Result, err error) {
 }
 
 type processCandidateOptions struct {
-	Job             candidateJob
-	OutDir          string
-	CharTolerance   int
-	Provider        string
-	ProviderCfg     config.ProviderConfig
-	Translation     config.TranslationConfig
-	APIKey          string
-	TranslateAPIKey string
-	TranslateSID    string
-	TranslateSK     string
-	Rules           config.SectionRules
-	MaxRetries      int
-	Client          *llm.Client
-	TranslateClient *translator.Client
-	Logger          *logging.Logger
+	Job                  candidateJob
+	OutDir               string
+	CharTolerance        int
+	Provider             string
+	ProviderCfg          config.ProviderConfig
+	TranslateProviderCfg config.ProviderConfig
+	APIKey               string
+	Rules                config.SectionRules
+	MaxRetries           int
+	Client               *llm.Client
+	TranslateClient      *translator.Client
+	Logger               *logging.Logger
 }
 
 func processCandidate(opts processCandidateOptions) bool {
@@ -258,21 +235,18 @@ func processCandidate(opts processCandidateOptions) bool {
 	_ = id
 
 	enDoc, cnDoc, enLatency, cnLatency, err := generateENAndTranslateCNBySections(bilingualGenerateOptions{
-		Req:             opts.Job.Req,
-		CharTolerance:   opts.CharTolerance,
-		Provider:        opts.Provider,
-		ProviderCfg:     opts.ProviderCfg,
-		Translation:     opts.Translation,
-		APIKey:          opts.APIKey,
-		TranslateAPIKey: opts.TranslateAPIKey,
-		TranslateSID:    opts.TranslateSID,
-		TranslateSK:     opts.TranslateSK,
-		Rules:           opts.Rules,
-		MaxRetries:      opts.MaxRetries,
-		Client:          opts.Client,
-		TranslateClient: opts.TranslateClient,
-		Logger:          opts.Logger,
-		Candidate:       opts.Job.Candidate,
+		Req:                  opts.Job.Req,
+		CharTolerance:        opts.CharTolerance,
+		Provider:             opts.Provider,
+		ProviderCfg:          opts.ProviderCfg,
+		TranslateProviderCfg: opts.TranslateProviderCfg,
+		APIKey:               opts.APIKey,
+		Rules:                opts.Rules,
+		MaxRetries:           opts.MaxRetries,
+		Client:               opts.Client,
+		TranslateClient:      opts.TranslateClient,
+		Logger:               opts.Logger,
+		Candidate:            opts.Job.Candidate,
 	})
 	if err != nil {
 		opts.Logger.Emit(logging.Event{Level: "error", Event: "generate_failed", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Error: err.Error()})
