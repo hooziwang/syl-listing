@@ -1,6 +1,14 @@
 provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
+rules_center:
+  enabled: true
+  owner: hooziwang
+  repo: syl-listing-rules
+  release: latest
+  asset: rules-bundle.tar.gz
+  timeout_sec: 20
+  strict: false
 char_tolerance: 20
 concurrency: 0
 max_retries: 3

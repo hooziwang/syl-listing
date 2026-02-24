@@ -115,6 +115,10 @@ func (l *Logger) formatHuman(ev Event) string {
 		return ""
 	case "config_loaded":
 		return ""
+	case "rules_sync_updated":
+		return fmt.Sprintf("规则中心：%s", fallback(ev.Error, "-"))
+	case "rules_sync_warning":
+		return fmt.Sprintf("规则中心警告：%s", fallback(ev.Error, "-"))
 	case "scan_warning":
 		return fmt.Sprintf("扫描警告：%s", fallback(ev.Error, "-"))
 	case "parse_failed":

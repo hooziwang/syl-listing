@@ -1,0 +1,26 @@
+version: 1
+section: bullets
+language: en
+purpose: 生成亚马逊 Listing 五点描述（仅英文）
+output:
+  format: json_object
+  json_key: bullets
+  lines: 5
+constraints:
+  min_chars_per_line:
+    value: 230
+    count: unicode_chars_including_spaces
+    hard: true
+    explain_zh: 每条五点最少 230 个字符（含空格）
+  max_chars_per_line:
+    value: 320
+    count: unicode_chars_including_spaces
+    hard: true
+    explain_zh: 每条五点最多 320 个字符（含空格）
+forbidden:
+  - markdown
+  - explanation
+instruction: |
+  只生成英文五点。
+  只输出 JSON object，格式 {"bullets":["...","...","...","...","..."]}。
+

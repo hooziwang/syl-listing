@@ -6,6 +6,7 @@ type Config struct {
 	Provider          string                    `yaml:"provider"`
 	APIKeyEnv         string                    `yaml:"api_key_env"`
 	RulesDir          string                    `yaml:"rules_dir"`
+	RulesCenter       RulesCenterConfig         `yaml:"rules_center"`
 	CharTolerance     int                       `yaml:"char_tolerance"`
 	Concurrency       int                       `yaml:"concurrency"`
 	MaxRetries        int                       `yaml:"max_retries"`
@@ -38,10 +39,21 @@ type Paths struct {
 	RootDir          string
 	ConfigPath       string
 	RulesDir         string
+	RulesLockPath    string
 	EnvPath          string
 	EnvExample       string
 	ConfigSource     string
 	ResolvedRulesDir string
+}
+
+type RulesCenterConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Owner      string `yaml:"owner"`
+	Repo       string `yaml:"repo"`
+	Release    string `yaml:"release"`
+	Asset      string `yaml:"asset"`
+	TimeoutSec int    `yaml:"timeout_sec"`
+	Strict     bool   `yaml:"strict"`
 }
 
 func (c *Config) applyDefaults() {
@@ -53,6 +65,21 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.RulesDir) == "" {
 		c.RulesDir = "~/.syl-listing/rules"
+	}
+	if strings.TrimSpace(c.RulesCenter.Owner) == "" {
+		c.RulesCenter.Owner = "hooziwang"
+	}
+	if strings.TrimSpace(c.RulesCenter.Repo) == "" {
+		c.RulesCenter.Repo = "syl-listing-rules"
+	}
+	if strings.TrimSpace(c.RulesCenter.Release) == "" {
+		c.RulesCenter.Release = "latest"
+	}
+	if strings.TrimSpace(c.RulesCenter.Asset) == "" {
+		c.RulesCenter.Asset = "rules-bundle.tar.gz"
+	}
+	if c.RulesCenter.TimeoutSec <= 0 {
+		c.RulesCenter.TimeoutSec = 20
 	}
 	if c.CharTolerance <= 0 {
 		c.CharTolerance = 20

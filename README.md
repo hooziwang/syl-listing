@@ -116,6 +116,7 @@ syl-listing gen ./requirements -n 2
 
 - `~/.syl-listing/config.yaml`
 - `~/.syl-listing/rules/`（仅目录，不生成默认规则文件）
+- `~/.syl-listing/rules.lock`（规则中心同步状态）
 - `~/.syl-listing/.env.example`
 
 并要求手动创建：
@@ -131,7 +132,7 @@ syl-listing gen ./requirements -n 2
 DEEPSEEK_API_KEY=
 ```
 
-## 规则文件（分段 + 结构化）
+## 规则文件（集中管理）
 
 规则目录默认：`~/.syl-listing/rules`
 
@@ -146,7 +147,9 @@ DEEPSEEK_API_KEY=
 - `constraints` / `output`：给程序校验的结构化约束
 
 程序直接把该规则文件原文作为 `system`，并解析同一文件做校验，不做二次拼接。
-`~/.syl-listing/rules` 是唯一规则定义源；缺少任一规则文件会直接报错。
+规则推荐由独立仓库 `syl-listing-rules` 统一发布，客户端启动时自动同步到本地缓存目录 `~/.syl-listing/rules`。
+
+不建议终端用户手改本地规则文件；规则变更应通过规则中心仓库发版。
 
 `title.yaml` 最小示例：
 
@@ -205,6 +208,14 @@ instruction: |
 provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
+rules_center:
+  enabled: true
+  owner: hooziwang
+  repo: syl-listing-rules
+  release: latest
+  asset: rules-bundle.tar.gz
+  timeout_sec: 20
+  strict: false
 char_tolerance: 20
 concurrency: 0
 max_retries: 3
@@ -218,6 +229,10 @@ providers:
     api_mode: chat
     model: deepseek-chat
     model_reasoning_effort: ""
+    thinking_fallback:
+      enabled: true
+      attempt: 3
+      model: deepseek-reasoner
 ```
 
 翻译固定使用 `providers.deepseek`（与生成共享同一 DeepSeek 配置与 key）。
@@ -236,6 +251,30 @@ providers:
 
 - 标题 `max=200`，`char_tolerance=20`：可接受 `<=220`。
 - 五点 `min=230,max=320`，`char_tolerance=20`：可接受 `[210,340]`。
+
+## 独立规则仓库
+
+推荐把规则拆到独立仓库（更新频率高于代码发版时）。
+
+用模板快速初始化：
+
+```bash
+cd syl-listing
+chmod +x scripts/init_rules_repo.sh
+scripts/init_rules_repo.sh syl-listing-rules ~/work/syl-listing-rules --create-remote public
+```
+
+模板目录：
+
+- `templates/rules-repo/`
+
+该模板包含：
+
+- `rules/*.yaml`
+- `.github/workflows/release.yml`
+- `scripts/build_bundle.sh`
+
+发布 tag（例如 `rules-v2026.03.01`）后，会自动上传 `rules-bundle.tar.gz` 到规则仓库 Releases。
 
 ## 参数
 
@@ -256,7 +295,9 @@ providers:
 - `文件不是 listing 需求格式（缺少首行标志）`：
   检查首个非空行是否为 `===Listing Requirements===`。
 - `缺少规则文件`：
-  检查 `~/.syl-listing/rules/` 下 4 个规则文件是否齐全。
+  检查规则中心发布资产是否存在，或检查 `~/.syl-listing/rules/` 本地缓存是否完整。
+- `规则中心警告：...`：
+  当 `rules_center.strict=false` 时会回退本地缓存继续运行；若要强制失败可设为 `strict=true`。
 - `... 为空。先复制 .../.env.example 为 .../.env 并填写 key`：
   复制并填写 `.env`，确认变量名与 `config.yaml` 对齐。
 - 生成慢或超时：

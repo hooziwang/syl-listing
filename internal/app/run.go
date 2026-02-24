@@ -68,6 +68,31 @@ func Run(opts Options) (result Result, err error) {
 	if !ok {
 		return Result{}, fmt.Errorf("配置中不存在 provider：%s", cfg.Provider)
 	}
+	translateProviderCfg, ok := cfg.Providers["deepseek"]
+	if !ok {
+		return Result{}, fmt.Errorf("配置中不存在 provider：deepseek（中文翻译固定使用 providers.deepseek）")
+	}
+
+	logger, closer, err := logging.New(opts.Stdout, opts.LogFile, opts.Verbose, cfg.Output.Num > 1)
+	if err != nil {
+		return Result{}, fmt.Errorf("初始化日志失败：%w", err)
+	}
+	if closer != nil {
+		defer closer.Close()
+	}
+	logger.Emit(logging.Event{Event: "startup", Provider: cfg.Provider, Model: providerCfg.Model})
+	logger.Emit(logging.Event{Event: "config_loaded", Input: paths.ConfigSource})
+
+	syncRes, syncErr := config.SyncRulesFromCenter(cfg, paths)
+	if syncErr != nil {
+		return Result{}, syncErr
+	}
+	if strings.TrimSpace(syncRes.Warning) != "" {
+		logger.Emit(logging.Event{Level: "warn", Event: "rules_sync_warning", Error: syncRes.Warning})
+	}
+	if syncRes.Updated && strings.TrimSpace(syncRes.Message) != "" {
+		logger.Emit(logging.Event{Event: "rules_sync_updated", Error: syncRes.Message})
+	}
 
 	rules, err := config.ReadSectionRules(paths.ResolvedRulesDir)
 	if err != nil {
@@ -82,18 +107,6 @@ func Run(opts Options) (result Result, err error) {
 	if apiKey == "" {
 		return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.APIKeyEnv, paths.EnvExample, paths.EnvPath)
 	}
-	translateProviderCfg, ok := cfg.Providers["deepseek"]
-	if !ok {
-		return Result{}, fmt.Errorf("配置中不存在 provider：deepseek（中文翻译固定使用 providers.deepseek）")
-	}
-
-	logger, closer, err := logging.New(opts.Stdout, opts.LogFile, opts.Verbose, cfg.Output.Num > 1)
-	if err != nil {
-		return Result{}, fmt.Errorf("初始化日志失败：%w", err)
-	}
-	if closer != nil {
-		defer closer.Close()
-	}
 	balanceAPIKey := resolveDeepSeekBalanceKey(envMap, apiKey)
 	defer func() {
 		balance, fetchErr := fetchDeepSeekBalanceWithRetry(balanceAPIKey, cfg.MaxRetries)
@@ -105,9 +118,6 @@ func Run(opts Options) (result Result, err error) {
 		result.Balance = formatBalanceForSummary(balance)
 		logger.Emit(logging.Event{Event: "balance", Balance: balance})
 	}()
-
-	logger.Emit(logging.Event{Event: "startup", Provider: cfg.Provider, Model: providerCfg.Model})
-	logger.Emit(logging.Event{Event: "config_loaded", Input: paths.ConfigSource})
 
 	inputPaths := make([]string, 0, len(opts.Inputs))
 	for _, in := range opts.Inputs {

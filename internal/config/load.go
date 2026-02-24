@@ -55,12 +55,13 @@ func resolvePaths(configArg string) (*Paths, error) {
 	}
 
 	return &Paths{
-		HomeDir:    home,
-		RootDir:    root,
-		ConfigPath: configPath,
-		RulesDir:   filepath.Join(root, "rules"),
-		EnvPath:    filepath.Join(root, ".env"),
-		EnvExample: filepath.Join(root, ".env.example"),
+		HomeDir:       home,
+		RootDir:       root,
+		ConfigPath:    configPath,
+		RulesDir:      filepath.Join(root, "rules"),
+		RulesLockPath: filepath.Join(root, "rules.lock"),
+		EnvPath:       filepath.Join(root, ".env"),
+		EnvExample:    filepath.Join(root, ".env.example"),
 	}, nil
 }
 

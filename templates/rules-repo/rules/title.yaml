@@ -1,0 +1,27 @@
+version: 1
+section: title
+language: en
+purpose: 生成亚马逊 Listing 标题（仅英文）
+output:
+  format: plain_text
+  lines: 1
+constraints:
+  max_chars:
+    value: 200
+    count: unicode_chars_including_spaces
+    hard: true
+    explain_zh: 标题最多 200 个字符（含空格）
+  must_contain_top_n_keywords:
+    value: 3
+    source: input.keywords
+    match: case_insensitive_substring
+    hard: true
+    explain_zh: 标题必须覆盖关键词库前 3 个关键词（不区分大小写，子串匹配）
+forbidden:
+  - markdown
+  - json
+  - explanation
+instruction: |
+  只生成英文标题。
+  输出 1 行纯文本，不要解释。
+
