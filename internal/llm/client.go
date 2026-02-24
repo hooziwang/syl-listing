@@ -21,6 +21,7 @@ type Request struct {
 	ReasoningEffort string
 	SystemPrompt    string
 	UserPrompt      string
+	JSONMode        bool
 	Timeout         time.Duration
 }
 
@@ -275,6 +276,9 @@ func (c *Client) generateDeepSeek(ctx context.Context, req Request) (string, err
 			{"role": "user", "content": req.UserPrompt},
 		},
 		"stream": false,
+	}
+	if req.JSONMode {
+		payload["response_format"] = map[string]string{"type": "json_object"}
 	}
 	var resp struct {
 		Choices []struct {

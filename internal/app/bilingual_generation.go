@@ -121,7 +121,7 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 	}
 	var enBullets []string
 	if strings.EqualFold(opts.Provider, "deepseek") {
-		items, itemLatency, itemErr := generateBulletsLineByLine(enSectionOpts, enDoc, bulletRule)
+		items, itemLatency, itemErr := generateBulletsWithJSONAndRepair(enSectionOpts, enDoc, bulletRule)
 		_ = itemLatency
 		if itemErr != nil {
 			return ListingDocument{}, ListingDocument{}, 0, 0, itemErr

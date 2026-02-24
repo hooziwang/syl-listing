@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"syl-listing/internal/config"
@@ -48,7 +50,7 @@ func generateDocumentBySections(opts sectionGenerateOptions) (ListingDocument, i
 	}
 	var bullets []string
 	if strings.EqualFold(opts.Provider, "deepseek") {
-		items, itemLatency, itemErr := generateBulletsLineByLine(opts, doc, bulletRule)
+		items, itemLatency, itemErr := generateBulletsWithJSONAndRepair(opts, doc, bulletRule)
 		total += itemLatency
 		if itemErr != nil {
 			return ListingDocument{}, total, itemErr
@@ -208,164 +210,493 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 	return outText, outLatency, nil
 }
 
-func generateBulletsLineByLine(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile) ([]string, int64, error) {
+func generateBulletsWithJSONAndRepair(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile) ([]string, int64, error) {
 	expected := rule.Parsed.Output.Lines
 	if expected <= 0 {
 		return nil, 0, fmt.Errorf("bullets 规则 output.lines 无效：%d", expected)
 	}
-	minLen := rule.Parsed.Constraints.MinCharsPerLine.Value
-	maxLen := rule.Parsed.Constraints.MaxCharsPerLine.Value
-	out := make([]string, 0, expected)
+	bounds := resolveCharBounds(
+		rule.Parsed.Constraints.MinCharsPerLine.Value,
+		rule.Parsed.Constraints.MaxCharsPerLine.Value,
+		opts.CharTolerance,
+	)
 	var total int64
 
-	for idx := 1; idx <= expected; idx++ {
-		var (
-			lineOut   string
-			latencyMS int64
-		)
-		lastIssues := ""
-		err := withExponentialBackoff(retryOptions{
-			MaxRetries: opts.MaxRetries,
-			BaseDelay:  500 * time.Millisecond,
-			MaxDelay:   8 * time.Second,
-			Jitter:     0.25,
-			OnRetry: func(attempt int, wait time.Duration, err error) {
-				opts.Logger.Emit(logging.Event{
-					Level:     "warn",
-					Event:     fmt.Sprintf("retry_backoff_bullets_item_%d", idx),
-					Input:     opts.Req.SourcePath,
-					Candidate: opts.Candidate,
-					Lang:      opts.Lang,
-					Attempt:   attempt,
-					WaitMS:    wait.Milliseconds(),
-					Error:     err.Error(),
-				})
-			},
-		}, func(attempt int) error {
-			systemPrompt := buildSectionSystemPrompt(rule)
-			tmpDoc := doc
-			tmpDoc.BulletPoints = append([]string{}, out...)
-			userPrompt := buildSectionUserPrompt("bullets", opts.Req, tmpDoc)
-			userPrompt += fmt.Sprintf("【子任务】只生成第%d条五点。只输出一行英文文本，不要编号，不要前缀。", idx)
-			if lastIssues != "" {
-				userPrompt += "\n\n【上次输出问题，必须全部修复】\n" + lastIssues
-			}
+	out, latencyMS, err := generateBulletsBatchJSONWithRetry(opts, doc, rule, bounds)
+	total += latencyMS
+	if err != nil {
+		return nil, total, err
+	}
 
-			reqEvent := logging.Event{
-				Event:     fmt.Sprintf("api_request_bullets_item_%d", idx),
-				Input:     opts.Req.SourcePath,
-				Candidate: opts.Candidate,
-				Lang:      opts.Lang,
-				Provider:  opts.Provider,
-				Model:     opts.ProviderCfg.Model,
-				APIMode:   opts.ProviderCfg.APIMode,
-				BaseURL:   opts.ProviderCfg.BaseURL,
-				Attempt:   attempt,
-			}
-			if opts.Logger.Verbose() {
-				reqEvent.SystemPrompt = systemPrompt
-				reqEvent.UserPrompt = userPrompt
-			}
-			opts.Logger.Emit(reqEvent)
-			resp, err := opts.Client.Generate(context.Background(), llm.Request{
-				Provider:        opts.Provider,
-				BaseURL:         opts.ProviderCfg.BaseURL,
-				Model:           opts.ProviderCfg.Model,
-				APIMode:         opts.ProviderCfg.APIMode,
-				APIKey:          opts.APIKey,
-				ReasoningEffort: opts.ProviderCfg.ModelReasoningEffort,
-				SystemPrompt:    systemPrompt,
-				UserPrompt:      userPrompt,
-			})
-			if err != nil {
-				lastIssues = "- API 调用失败: " + err.Error()
-				opts.Logger.Emit(logging.Event{
-					Level:     "warn",
-					Event:     fmt.Sprintf("api_error_bullets_item_%d", idx),
-					Input:     opts.Req.SourcePath,
-					Candidate: opts.Candidate,
-					Lang:      opts.Lang,
-					Attempt:   attempt,
-					Error:     err.Error(),
-				})
-				return errors.New(lastIssues)
-			}
+	invalidIndexes, issues, warnings := validateBulletSet(out, bounds)
+	for _, w := range warnings {
+		opts.Logger.Emit(logging.Event{
+			Level:     "warn",
+			Event:     "validation_warning",
+			Input:     opts.Req.SourcePath,
+			Candidate: opts.Candidate,
+			Lang:      opts.Lang,
+			Error:     w,
+		})
+	}
+	if len(issues) > 0 && len(invalidIndexes) == 0 {
+		return nil, total, fmt.Errorf("bullets 校验失败：%s", strings.Join(issues, "; "))
+	}
+	if len(invalidIndexes) == 0 {
+		return out, total, nil
+	}
 
-			raw := normalizeModelText(resp.Text)
-			respEvent := logging.Event{
-				Event:     fmt.Sprintf("api_response_bullets_item_%d", idx),
-				Input:     opts.Req.SourcePath,
-				Candidate: opts.Candidate,
-				Lang:      opts.Lang,
-				Provider:  opts.Provider,
-				Model:     opts.ProviderCfg.Model,
-				LatencyMS: resp.LatencyMS,
-				Attempt:   attempt,
-			}
-			if opts.Logger.Verbose() {
-				respEvent.ResponseText = raw
-			}
-			opts.Logger.Emit(respEvent)
-			issues := make([]string, 0, 4)
-			if countNonEmptyLines(raw) != 1 {
-				issues = append(issues, fmt.Sprintf("第%d条应为单行输出", idx))
-			}
-			line := cleanBulletLine(raw)
-			if strings.TrimSpace(line) == "" {
-				issues = append(issues, fmt.Sprintf("第%d条为空", idx))
-			}
-			n := runeLen(line)
-			bounds := resolveCharBounds(minLen, maxLen, opts.CharTolerance)
-			if bounds.hasRule() {
-				switch {
-				case bounds.inRule(n):
-				case bounds.inTolerance(n):
-					opts.Logger.Emit(logging.Event{
-						Level:     "warn",
-						Event:     "validation_warning",
-						Input:     opts.Req.SourcePath,
-						Candidate: opts.Candidate,
-						Lang:      opts.Lang,
-						Attempt:   attempt,
-						Error: fmt.Sprintf(
-							"第%d条长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行",
-							idx,
-							n,
-							bounds.ruleText(),
-							bounds.toleranceText(),
-						),
-					})
-				default:
-					issues = append(issues, fmt.Sprintf("第%d条长度超出容差区间：%d 不在 %s（规则区间 %s）", idx, n, bounds.toleranceText(), bounds.ruleText()))
+	snapshot := append([]string{}, out...)
+	repaired := append([]string{}, out...)
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		firstErr  error
+		repairSum int64
+	)
+	for _, idx := range invalidIndexes {
+		idx := idx
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			line, latency, itemErr := regenerateBulletItemJSONWithRetry(opts, doc, rule, idx, snapshot, bounds)
+			mu.Lock()
+			defer mu.Unlock()
+			repairSum += latency
+			if itemErr != nil {
+				if firstErr == nil {
+					firstErr = itemErr
 				}
+				return
 			}
-			if len(issues) > 0 {
-				lastIssues = "- " + strings.Join(issues, "\n- ")
-				opts.Logger.Emit(logging.Event{
-					Level:     "warn",
-					Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
-					Input:     opts.Req.SourcePath,
-					Candidate: opts.Candidate,
-					Lang:      opts.Lang,
-					Attempt:   attempt,
-					Error:     strings.Join(issues, "; "),
-				})
-				return errors.New(strings.Join(issues, "; "))
-			}
-			lineOut = line
-			latencyMS = resp.LatencyMS
-			return nil
+			repaired[idx-1] = line
+		}()
+	}
+	wg.Wait()
+	total += repairSum
+	if firstErr != nil {
+		return nil, total, firstErr
+	}
+
+	_, finalIssues, _ := validateBulletSet(repaired, bounds)
+	if len(finalIssues) > 0 {
+		return nil, total, fmt.Errorf("bullets 修复后仍不满足规则：%s", strings.Join(finalIssues, "; "))
+	}
+	return repaired, total, nil
+}
+
+type bulletsBatchJSON struct {
+	Bullets []string `json:"bullets"`
+	Items   []string `json:"items"`
+}
+
+type bulletItemJSON struct {
+	Bullet string `json:"bullet"`
+	Text   string `json:"text"`
+	Item   string `json:"item"`
+}
+
+func generateBulletsBatchJSONWithRetry(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile, bounds charBounds) ([]string, int64, error) {
+	expected := rule.Parsed.Output.Lines
+	var (
+		outItems   []string
+		outLatency int64
+	)
+	lastIssues := ""
+	err := withExponentialBackoff(retryOptions{
+		MaxRetries: opts.MaxRetries,
+		BaseDelay:  500 * time.Millisecond,
+		MaxDelay:   8 * time.Second,
+		Jitter:     0.25,
+		OnRetry: func(attempt int, wait time.Duration, err error) {
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     "retry_backoff_bullets",
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				WaitMS:    wait.Milliseconds(),
+				Error:     err.Error(),
+			})
+		},
+	}, func(attempt int) error {
+		systemPrompt := buildSectionSystemPrompt(rule) + `
+
+【JSON协议】
+Return valid json only.
+必须只返回一个 json object，禁止 markdown 代码块、禁止解释。
+对象结构固定为：{"bullets":["line1","line2","line3","line4","line5"]}`
+		userPrompt := buildSectionUserPrompt("bullets", opts.Req, doc)
+		userPrompt += fmt.Sprintf("\n【输出要求】必须返回 json object，键名是 bullets，且 bullets 必须恰好 %d 条。", expected)
+		if lastIssues != "" {
+			userPrompt += "\n\n【上次输出问题，必须全部修复】\n" + lastIssues
+		}
+
+		reqEvent := logging.Event{
+			Event:     "api_request_bullets",
+			Input:     opts.Req.SourcePath,
+			Candidate: opts.Candidate,
+			Lang:      opts.Lang,
+			Provider:  opts.Provider,
+			Model:     opts.ProviderCfg.Model,
+			APIMode:   opts.ProviderCfg.APIMode,
+			BaseURL:   opts.ProviderCfg.BaseURL,
+			Attempt:   attempt,
+		}
+		if opts.Logger.Verbose() {
+			reqEvent.SystemPrompt = systemPrompt
+			reqEvent.UserPrompt = userPrompt
+		}
+		opts.Logger.Emit(reqEvent)
+		resp, err := opts.Client.Generate(context.Background(), llm.Request{
+			Provider:        opts.Provider,
+			BaseURL:         opts.ProviderCfg.BaseURL,
+			Model:           opts.ProviderCfg.Model,
+			APIMode:         opts.ProviderCfg.APIMode,
+			APIKey:          opts.APIKey,
+			ReasoningEffort: opts.ProviderCfg.ModelReasoningEffort,
+			SystemPrompt:    systemPrompt,
+			UserPrompt:      userPrompt,
+			JSONMode:        true,
 		})
 		if err != nil {
-			if strings.TrimSpace(lastIssues) == "" {
-				lastIssues = err.Error()
-			}
-			return nil, total, fmt.Errorf("bullets 第%d条重试后仍失败: %s", idx, lastIssues)
+			lastIssues = "- API 调用失败: " + err.Error()
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     "api_error_bullets",
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     err.Error(),
+			})
+			return errors.New(lastIssues)
 		}
-		total += latencyMS
-		out = append(out, lineOut)
+		text := normalizeModelText(resp.Text)
+		respEvent := logging.Event{
+			Event:     "api_response_bullets",
+			Input:     opts.Req.SourcePath,
+			Candidate: opts.Candidate,
+			Lang:      opts.Lang,
+			Provider:  opts.Provider,
+			Model:     opts.ProviderCfg.Model,
+			LatencyMS: resp.LatencyMS,
+			Attempt:   attempt,
+		}
+		if opts.Logger.Verbose() {
+			respEvent.ResponseText = text
+		}
+		opts.Logger.Emit(respEvent)
+
+		items, parseErr := parseBulletsFromJSON(text, expected)
+		if parseErr != nil {
+			lastIssues = "- JSON 解析失败: " + parseErr.Error()
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     "validate_error_bullets",
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     parseErr.Error(),
+			})
+			return errors.New(lastIssues)
+		}
+		outItems = items
+		outLatency = resp.LatencyMS
+		return nil
+	})
+	if err != nil {
+		if strings.TrimSpace(lastIssues) == "" {
+			lastIssues = err.Error()
+		}
+		return nil, 0, fmt.Errorf("bullets 批量生成重试后仍失败: %s", lastIssues)
 	}
-	return out, total, nil
+	return outItems, outLatency, nil
+}
+
+func regenerateBulletItemJSONWithRetry(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile, idx int, current []string, bounds charBounds) (string, int64, error) {
+	var (
+		outLine    string
+		outLatency int64
+	)
+	lastIssues := ""
+	err := withExponentialBackoff(retryOptions{
+		MaxRetries: opts.MaxRetries,
+		BaseDelay:  500 * time.Millisecond,
+		MaxDelay:   8 * time.Second,
+		Jitter:     0.25,
+		OnRetry: func(attempt int, wait time.Duration, err error) {
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     fmt.Sprintf("retry_backoff_bullets_item_%d", idx),
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				WaitMS:    wait.Milliseconds(),
+				Error:     err.Error(),
+			})
+		},
+	}, func(attempt int) error {
+		systemPrompt := buildSectionSystemPrompt(rule) + `
+
+【JSON协议】
+Return valid json only.
+必须只返回一个 json object：{"bullet":"..."}`
+		tmpDoc := doc
+		tmpDoc.BulletPoints = append([]string{}, current...)
+		userPrompt := buildSectionUserPrompt("bullets", opts.Req, tmpDoc)
+		userPrompt += fmt.Sprintf("\n【子任务】只修复第%d条，返回 json object：{\"bullet\":\"...\"}。", idx)
+		if lastIssues != "" {
+			userPrompt += "\n\n【上次输出问题，必须全部修复】\n" + lastIssues
+		}
+
+		reqEvent := logging.Event{
+			Event:     fmt.Sprintf("api_request_bullets_item_%d", idx),
+			Input:     opts.Req.SourcePath,
+			Candidate: opts.Candidate,
+			Lang:      opts.Lang,
+			Provider:  opts.Provider,
+			Model:     opts.ProviderCfg.Model,
+			APIMode:   opts.ProviderCfg.APIMode,
+			BaseURL:   opts.ProviderCfg.BaseURL,
+			Attempt:   attempt,
+		}
+		if opts.Logger.Verbose() {
+			reqEvent.SystemPrompt = systemPrompt
+			reqEvent.UserPrompt = userPrompt
+		}
+		opts.Logger.Emit(reqEvent)
+		resp, err := opts.Client.Generate(context.Background(), llm.Request{
+			Provider:        opts.Provider,
+			BaseURL:         opts.ProviderCfg.BaseURL,
+			Model:           opts.ProviderCfg.Model,
+			APIMode:         opts.ProviderCfg.APIMode,
+			APIKey:          opts.APIKey,
+			ReasoningEffort: opts.ProviderCfg.ModelReasoningEffort,
+			SystemPrompt:    systemPrompt,
+			UserPrompt:      userPrompt,
+			JSONMode:        true,
+		})
+		if err != nil {
+			lastIssues = "- API 调用失败: " + err.Error()
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     fmt.Sprintf("api_error_bullets_item_%d", idx),
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     err.Error(),
+			})
+			return errors.New(lastIssues)
+		}
+
+		text := normalizeModelText(resp.Text)
+		respEvent := logging.Event{
+			Event:     fmt.Sprintf("api_response_bullets_item_%d", idx),
+			Input:     opts.Req.SourcePath,
+			Candidate: opts.Candidate,
+			Lang:      opts.Lang,
+			Provider:  opts.Provider,
+			Model:     opts.ProviderCfg.Model,
+			LatencyMS: resp.LatencyMS,
+			Attempt:   attempt,
+		}
+		if opts.Logger.Verbose() {
+			respEvent.ResponseText = text
+		}
+		opts.Logger.Emit(respEvent)
+
+		line, parseErr := parseBulletItemFromJSON(text)
+		if parseErr != nil {
+			lastIssues = "- JSON 解析失败: " + parseErr.Error()
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     parseErr.Error(),
+			})
+			return errors.New(lastIssues)
+		}
+
+		issues, warnings := validateBulletLine(idx, line, bounds)
+		for _, w := range warnings {
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     "validation_warning",
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     w,
+			})
+		}
+		if len(issues) > 0 {
+			lastIssues = "- " + strings.Join(issues, "\n- ")
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     strings.Join(issues, "; "),
+			})
+			return errors.New(strings.Join(issues, "; "))
+		}
+		outLine = cleanBulletLine(line)
+		outLatency = resp.LatencyMS
+		return nil
+	})
+	if err != nil {
+		if strings.TrimSpace(lastIssues) == "" {
+			lastIssues = err.Error()
+		}
+		return "", 0, fmt.Errorf("bullets 第%d条修复重试后仍失败: %s", idx, lastIssues)
+	}
+	return outLine, outLatency, nil
+}
+
+func validateBulletSet(items []string, bounds charBounds) ([]int, []string, []string) {
+	invalid := make([]int, 0, len(items))
+	issues := make([]string, 0, len(items))
+	warnings := make([]string, 0, len(items))
+	for i, it := range items {
+		lineIssues, lineWarnings := validateBulletLine(i+1, it, bounds)
+		if len(lineIssues) > 0 {
+			invalid = append(invalid, i+1)
+			issues = append(issues, lineIssues...)
+		}
+		if len(lineWarnings) > 0 {
+			warnings = append(warnings, lineWarnings...)
+		}
+	}
+	return invalid, dedupeIssues(issues), dedupeIssues(warnings)
+}
+
+func validateBulletLine(idx int, raw string, bounds charBounds) ([]string, []string) {
+	issues := make([]string, 0, 3)
+	warnings := make([]string, 0, 1)
+	if countNonEmptyLines(raw) != 1 {
+		issues = append(issues, fmt.Sprintf("第%d条应为单行输出", idx))
+	}
+	line := cleanBulletLine(raw)
+	if strings.TrimSpace(line) == "" {
+		issues = append(issues, fmt.Sprintf("第%d条为空", idx))
+		return issues, warnings
+	}
+	n := runeLen(line)
+	if bounds.hasRule() && !bounds.inRule(n) {
+		if bounds.inTolerance(n) {
+			warnings = append(warnings, fmt.Sprintf("第%d条长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行", idx, n, bounds.ruleText(), bounds.toleranceText()))
+		} else {
+			issues = append(issues, fmt.Sprintf("第%d条长度超出容差区间：%d 不在 %s（规则区间 %s）", idx, n, bounds.toleranceText(), bounds.ruleText()))
+		}
+	}
+	return issues, warnings
+}
+
+func parseBulletsFromJSON(text string, expected int) ([]string, error) {
+	var payload bulletsBatchJSON
+	if err := decodeJSONObject(text, &payload); err != nil {
+		return nil, err
+	}
+	items := payload.Bullets
+	if len(items) == 0 {
+		items = payload.Items
+	}
+	if len(items) != expected {
+		return nil, fmt.Errorf("五点数量错误：%d != %d", len(items), expected)
+	}
+	out := make([]string, 0, expected)
+	for i, it := range items {
+		clean := cleanBulletLine(it)
+		if strings.TrimSpace(clean) == "" {
+			return nil, fmt.Errorf("第%d条为空", i+1)
+		}
+		out = append(out, clean)
+	}
+	return out, nil
+}
+
+func parseBulletItemFromJSON(text string) (string, error) {
+	var payload bulletItemJSON
+	if err := decodeJSONObject(text, &payload); err != nil {
+		return "", err
+	}
+	line := strings.TrimSpace(payload.Bullet)
+	if line == "" {
+		line = strings.TrimSpace(payload.Text)
+	}
+	if line == "" {
+		line = strings.TrimSpace(payload.Item)
+	}
+	if line == "" {
+		return "", fmt.Errorf("缺少 bullet 字段")
+	}
+	return line, nil
+}
+
+func decodeJSONObject(raw string, out any) error {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return fmt.Errorf("JSON 为空")
+	}
+	if err := json.Unmarshal([]byte(text), out); err == nil {
+		return nil
+	}
+	obj := extractJSONObject(text)
+	if strings.TrimSpace(obj) == "" {
+		return fmt.Errorf("未找到有效 JSON 对象")
+	}
+	if err := json.Unmarshal([]byte(obj), out); err != nil {
+		return fmt.Errorf("JSON 解析失败：%w", err)
+	}
+	return nil
+}
+
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch ch {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func buildSectionSystemPrompt(rule config.SectionRuleFile) string {

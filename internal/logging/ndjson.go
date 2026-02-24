@@ -270,6 +270,16 @@ func humanTranslateLabel(step string) (string, string, bool) {
 }
 
 func humanStepLabel(step string) string {
+	switch {
+	case strings.HasPrefix(step, "bullets_item_"):
+		return "英文五点描述生成"
+	case strings.HasPrefix(step, "translate_bullet_"):
+		return "中文五点描述翻译"
+	case strings.HasPrefix(step, "description_"), strings.HasPrefix(step, "translate_description_"):
+		return "中文产品描述翻译"
+	case strings.HasPrefix(step, "translate_keyword_"):
+		return "中文分类与关键词翻译"
+	}
 	if strings.HasPrefix(step, "translate_") {
 		label, _, ok := humanTranslateLabel(strings.TrimPrefix(step, "translate_"))
 		if ok {
