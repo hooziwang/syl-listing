@@ -5,7 +5,6 @@ import "strings"
 type Config struct {
 	Provider          string                    `yaml:"provider"`
 	APIKeyEnv         string                    `yaml:"api_key_env"`
-	RulesDir          string                    `yaml:"rules_dir"`
 	RulesCenter       RulesCenterConfig         `yaml:"rules_center"`
 	CharTolerance     int                       `yaml:"char_tolerance"`
 	Concurrency       int                       `yaml:"concurrency"`
@@ -61,9 +60,6 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.APIKeyEnv) == "" {
 		c.APIKeyEnv = "DEEPSEEK_API_KEY"
-	}
-	if strings.TrimSpace(c.RulesDir) == "" {
-		c.RulesDir = "~/.syl-listing/rules"
 	}
 	if strings.TrimSpace(c.RulesCenter.Owner) == "" {
 		c.RulesCenter.Owner = "hooziwang"

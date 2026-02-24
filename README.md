@@ -62,7 +62,7 @@ scoop bucket rm hooziwang; scoop bucket add hooziwang https://github.com/hooziwa
 - keyword two
 ```
 
-2. 首次运行（会自动初始化 `~/.syl-listing/config.yaml`、`~/.syl-listing/rules/`、`~/.syl-listing/.env.example`）：
+2. 首次运行（会自动初始化 `~/.syl-listing/config.yaml`、`~/.syl-listing/.env.example`，并自动准备规则缓存）：
 
 ```bash
 syl-listing demo.md
@@ -115,9 +115,8 @@ syl-listing gen ./requirements -n 2
 首次运行会自动创建：
 
 - `~/.syl-listing/config.yaml`
-- `~/.syl-listing/rules/`（仅目录，不生成默认规则文件）
-- `~/.syl-listing/rules.lock`（规则中心同步状态）
 - `~/.syl-listing/.env.example`
+- 规则缓存目录与规则锁文件（位于系统缓存目录，程序自动维护）
 
 并要求手动创建：
 
@@ -134,7 +133,7 @@ DEEPSEEK_API_KEY=
 
 ## 规则文件（集中管理）
 
-规则目录默认：`~/.syl-listing/rules`
+规则文件由程序自动同步并缓存，不需要用户配置路径。
 
 - `title.yaml`
 - `bullets.yaml`
@@ -147,7 +146,7 @@ DEEPSEEK_API_KEY=
 - `constraints` / `output`：给程序校验的结构化约束
 
 程序直接把该规则文件原文作为 `system`，并解析同一文件做校验，不做二次拼接。
-规则推荐由独立仓库 `syl-listing-rules` 统一发布，客户端启动时自动同步到本地缓存目录 `~/.syl-listing/rules`。
+规则推荐由独立仓库 `syl-listing-rules` 统一发布，客户端启动时自动同步到本机缓存。
 
 不建议终端用户手改本地规则文件；规则变更应通过规则中心仓库发版。
 
@@ -207,7 +206,6 @@ instruction: |
 ```yaml
 provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
-rules_dir: ~/.syl-listing/rules
 rules_center:
   owner: hooziwang
   repo: syl-listing-rules
@@ -270,7 +268,7 @@ providers:
 - `文件不是 listing 需求格式（缺少首行标志）`：
   检查首个非空行是否为 `===Listing Requirements===`。
 - `缺少规则文件`：
-  检查规则中心发布资产是否存在，或检查 `~/.syl-listing/rules/` 本地缓存是否完整。
+  检查规则中心发布资产是否存在，或重新运行命令让程序自动重建本机规则缓存。
 - `规则中心警告：...`：
   默认会先尝试规则中心同步；当 `rules_center.strict=false` 时会回退本地缓存继续运行；若要强制失败可设为 `strict=true`。
 - `... 为空。先复制 .../.env.example 为 .../.env 并填写 key`：

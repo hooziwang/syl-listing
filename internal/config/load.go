@@ -36,7 +36,7 @@ func Load(pathArg, cwd string) (*Config, *Paths, error) {
 	cfg.applyDefaults()
 
 	paths.ConfigSource = paths.ConfigPath
-	paths.ResolvedRulesDir = expandPath(cfg.RulesDir, paths.HomeDir, cwd)
+	paths.ResolvedRulesDir = paths.RulesDir
 	if err := ensureRuleDir(paths.ResolvedRulesDir); err != nil {
 		return nil, nil, err
 	}
@@ -48,7 +48,13 @@ func resolvePaths(configArg string) (*Paths, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取用户目录失败：%w", err)
 	}
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(cacheRoot) == "" {
+		cacheRoot = filepath.Join(home, ".cache")
+	}
+
 	root := filepath.Join(home, ".syl-listing")
+	rulesRoot := filepath.Join(cacheRoot, "syl-listing")
 	configPath := filepath.Join(root, "config.yaml")
 	if strings.TrimSpace(configArg) != "" {
 		configPath = expandPath(configArg, home, "")
@@ -58,8 +64,8 @@ func resolvePaths(configArg string) (*Paths, error) {
 		HomeDir:       home,
 		RootDir:       root,
 		ConfigPath:    configPath,
-		RulesDir:      filepath.Join(root, "rules"),
-		RulesLockPath: filepath.Join(root, "rules.lock"),
+		RulesDir:      filepath.Join(rulesRoot, "rules"),
+		RulesLockPath: filepath.Join(rulesRoot, "rules.lock"),
 		EnvPath:       filepath.Join(root, ".env"),
 		EnvExample:    filepath.Join(root, ".env.example"),
 	}, nil
@@ -114,7 +120,7 @@ func ReadSectionRules(dir string) (SectionRules, error) {
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return SectionRuleFile{}, fmt.Errorf("缺少规则文件（%s）。规则唯一来源是 ~/.syl-listing/rules", p)
+				return SectionRuleFile{}, fmt.Errorf("缺少规则文件（%s）。规则由规则中心自动同步到本机缓存", p)
 			}
 			return SectionRuleFile{}, fmt.Errorf("读取规则文件失败（%s）：%w", p, err)
 		}
