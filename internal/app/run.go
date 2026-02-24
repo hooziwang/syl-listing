@@ -27,6 +27,7 @@ type Options struct {
 	MaxRetries      int
 	Provider        string
 	LogFile         string
+	Verbose         bool
 	CWD             string
 	Stdout          io.Writer
 	Stderr          io.Writer
@@ -78,6 +79,7 @@ func Run(opts Options) (Result, error) {
 	if apiKey == "" {
 		return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.APIKeyEnv, paths.EnvExample, paths.EnvPath)
 	}
+	translateAPIKey := strings.TrimSpace(envMap[cfg.Translation.APIKeyEnv])
 	translateSecretID := strings.TrimSpace(envMap[cfg.Translation.SecretIDEnv])
 	translateSecretKey := strings.TrimSpace(envMap[cfg.Translation.SecretKeyEnv])
 	switch strings.ToLower(strings.TrimSpace(cfg.Translation.Provider)) {
@@ -88,11 +90,18 @@ func Run(opts Options) (Result, error) {
 		if translateSecretKey == "" {
 			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.SecretKeyEnv, paths.EnvExample, paths.EnvPath)
 		}
+	case "deepseek":
+		if strings.TrimSpace(cfg.Translation.APIKeyEnv) == "" {
+			translateAPIKey = apiKey
+		}
+		if translateAPIKey == "" {
+			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.APIKeyEnv, paths.EnvExample, paths.EnvPath)
+		}
 	default:
-		return Result{}, fmt.Errorf("翻译 provider 仅支持 tencent_tmt，当前：%s", cfg.Translation.Provider)
+		return Result{}, fmt.Errorf("翻译 provider 仅支持 tencent_tmt/deepseek，当前：%s", cfg.Translation.Provider)
 	}
 
-	logger, closer, err := logging.New(opts.Stdout, opts.LogFile)
+	logger, closer, err := logging.New(opts.Stdout, opts.LogFile, opts.Verbose)
 	if err != nil {
 		return Result{}, fmt.Errorf("初始化日志失败：%w", err)
 	}
@@ -176,9 +185,9 @@ func Run(opts Options) (Result, error) {
 						OutDir:          outDir,
 						Provider:        cfg.Provider,
 						ProviderCfg:     providerCfg,
-						Generation:      cfg.Generation,
 						Translation:     cfg.Translation,
 						APIKey:          apiKey,
+						TranslateAPIKey: translateAPIKey,
 						TranslateSID:    translateSecretID,
 						TranslateSK:     translateSecretKey,
 						Rules:           rules,
@@ -211,9 +220,9 @@ type processCandidateOptions struct {
 	OutDir          string
 	Provider        string
 	ProviderCfg     config.ProviderConfig
-	Generation      config.GenerationConfig
 	Translation     config.TranslationConfig
 	APIKey          string
+	TranslateAPIKey string
 	TranslateSID    string
 	TranslateSK     string
 	Rules           config.SectionRules
@@ -235,9 +244,9 @@ func processCandidate(opts processCandidateOptions) bool {
 		Req:             opts.Job.Req,
 		Provider:        opts.Provider,
 		ProviderCfg:     opts.ProviderCfg,
-		Generation:      opts.Generation,
 		Translation:     opts.Translation,
 		APIKey:          opts.APIKey,
+		TranslateAPIKey: opts.TranslateAPIKey,
 		TranslateSID:    opts.TranslateSID,
 		TranslateSK:     opts.TranslateSK,
 		Rules:           opts.Rules,

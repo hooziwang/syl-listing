@@ -21,6 +21,7 @@ type Request struct {
 	Provider   string
 	Endpoint   string
 	Model      string
+	APIKey     string
 	SecretID   string
 	SecretKey  string
 	Region     string
@@ -56,6 +57,8 @@ func (c *Client) Translate(ctx context.Context, req Request) (Response, error) {
 	switch provider {
 	case "tencent_tmt":
 		return c.translateTencent(ctx, req)
+	case "deepseek":
+		return c.translateDeepSeek(ctx, req)
 	default:
 		return Response{}, fmt.Errorf("不支持的翻译 provider：%s", req.Provider)
 	}
@@ -76,6 +79,20 @@ func (c *Client) TranslateBatch(ctx context.Context, req Request, sourceTexts []
 	switch provider {
 	case "tencent_tmt":
 		return c.translateTencentBatch(ctx, req, texts)
+	case "deepseek":
+		out := make([]string, 0, len(texts))
+		var total int64
+		for _, src := range texts {
+			oneReq := req
+			oneReq.UserPrompt = src
+			resp, err := c.translateDeepSeek(ctx, oneReq)
+			if err != nil {
+				return BatchResponse{}, err
+			}
+			total += resp.LatencyMS
+			out = append(out, strings.TrimSpace(resp.Text))
+		}
+		return BatchResponse{Texts: out, LatencyMS: total}, nil
 	default:
 		return BatchResponse{}, fmt.Errorf("不支持的翻译 provider：%s", req.Provider)
 	}
@@ -88,9 +105,61 @@ func normalizeProvider(provider string) string {
 		return "tencent_tmt"
 	case "tencent", "tencent_tmt":
 		return "tencent_tmt"
+	case "deepseek":
+		return "deepseek"
 	default:
 		return p
 	}
+}
+
+func (c *Client) translateDeepSeek(ctx context.Context, req Request) (Response, error) {
+	endpoint := strings.TrimSpace(req.Endpoint)
+	if endpoint == "" {
+		endpoint = "https://api.deepseek.com"
+	}
+	if strings.TrimSpace(req.APIKey) == "" {
+		return Response{}, fmt.Errorf("DeepSeek API key 为空")
+	}
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = "deepseek-chat"
+	}
+	source, target := normalizeLang(req.Source, req.Target)
+	systemPrompt := fmt.Sprintf("你是专业翻译。将用户输入从 %s 翻译到 %s。只输出翻译结果，不要解释。", source, target)
+	payload := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": req.UserPrompt},
+		},
+		"stream": false,
+	}
+
+	start := time.Now()
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, joinURL(endpoint, "/chat/completions"), req.APIKey, payload, &resp); err != nil {
+		return Response{}, err
+	}
+	if resp.Error != nil {
+		return Response{}, fmt.Errorf("DeepSeek 翻译错误：%s", resp.Error.Message)
+	}
+	if len(resp.Choices) == 0 {
+		return Response{}, fmt.Errorf("DeepSeek 翻译返回为空")
+	}
+	text := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if text == "" {
+		return Response{}, fmt.Errorf("DeepSeek 翻译内容为空")
+	}
+	return Response{Text: text, LatencyMS: time.Since(start).Milliseconds()}, nil
 }
 
 func (c *Client) translateTencent(ctx context.Context, req Request) (Response, error) {
@@ -312,4 +381,49 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func (c *Client) doJSON(ctx context.Context, method, endpoint, bearer string, in any, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("编码请求失败：%w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("创建请求失败：%w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(bearer) != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("请求失败：%w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败：%w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("解析响应失败：%w; 原始响应: %s", err, truncate(string(raw), 800))
+	}
+	return nil
+}
+
+func joinURL(base, path string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "https://api.deepseek.com"
+	}
+	base = strings.TrimSuffix(base, "/")
+	if strings.HasPrefix(path, "/") {
+		return base + path
+	}
+	return base + "/" + path
 }

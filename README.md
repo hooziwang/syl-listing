@@ -15,23 +15,29 @@ syl-listing version
 首次运行会自动创建：
 
 - `~/.syl-listing/config.yaml`
-- `~/.syl-listing/rules/`（分段规则目录）
+- `~/.syl-listing/rules/`（仅目录，不生成默认规则文件）
 - `~/.syl-listing/.env.example`
 
 并要求手动创建：
 
 - `~/.syl-listing/.env`
 
-## 规则文件（分段）
+## 规则文件（分段 + 结构化）
 
 规则目录默认：`~/.syl-listing/rules`
 
-- `title.md`
-- `bullets.md`
-- `description.md`
-- `search_terms.md`
+- `title.yaml`
+- `bullets.yaml`
+- `description.yaml`
+- `search_terms.yaml`
 
-每一步只加载对应规则文件。模型侧只负责英文生成。
+每一步只加载对应规则文件。每个规则文件同时包含：
+
+- `instruction`：给模型的规则描述
+- `constraints` / `output`：给程序校验的结构化约束
+
+程序直接把该规则文件原文作为 `system`，并解析同一文件做校验，不做二次拼接。
+`~/.syl-listing/rules` 是唯一规则定义源；缺少任一规则文件会直接报错。
 
 ## 生成流程
 
@@ -58,11 +64,17 @@ syl-listing version
 
 `xxxxxxxx` 为 8 位随机串（数字 + 大小写字母），冲突自动重试。
 
+## 日志输出
+
+- 默认：终端输出简洁的人类可读进度日志。
+- `--verbose`：终端输出详细 NDJSON（机器友好，包含模型请求/响应内容）。
+- `--log-file`：额外写入 NDJSON 到文件；默认模式下仅文件是 NDJSON。
+
 ## 配置文件示例
 
 ```yaml
-provider: openai
-api_key_env: SYL_LISTING_API_KEY
+provider: deepseek
+api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
 concurrency: 0
 max_retries: 3
@@ -70,7 +82,19 @@ request_timeout_sec: 300
 output:
   dir: .
   num: 1
+translation:
+  provider: deepseek
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+  source: en
+  target: zh
 providers:
+  deepseek:
+    base_url: https://api.deepseek.com
+    api_mode: chat
+    model: deepseek-chat
+    model_reasoning_effort: ""
   openai:
     base_url: https://flux-code.cc
     api_mode: responses
@@ -78,7 +102,7 @@ providers:
     model_reasoning_effort: high
 ```
 
-翻译配置可在 `translation` 节点覆盖；当前仅支持 `tencent_tmt`。
+翻译配置可在 `translation` 节点覆盖；当前支持 `tencent_tmt` 和 `deepseek`。
 
 ## 参数
 
@@ -89,6 +113,7 @@ providers:
 --concurrency   保留参数（当前版本不限制并发）
 --max-retries   最大重试次数
 --provider      覆盖配置中的 provider
---log-file      NDJSON 日志文件路径（默认 stdout）
+--verbose       终端输出详细 NDJSON（机器友好）
+--log-file      NDJSON 日志文件路径
 -v, --version   版本
 ```

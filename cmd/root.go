@@ -17,6 +17,7 @@ type genFlags struct {
 	maxRetriesArg  int
 	providerArg    string
 	logFileArg     string
+	verboseArg     bool
 }
 
 func Execute() error {
@@ -76,6 +77,7 @@ func bindGenFlags(cmd *cobra.Command, flags *genFlags) {
 	cmd.PersistentFlags().IntVar(&flags.maxRetriesArg, "max-retries", 0, "最大重试次数")
 	cmd.PersistentFlags().StringVar(&flags.providerArg, "provider", "", "覆盖配置中的 provider")
 	cmd.PersistentFlags().StringVar(&flags.logFileArg, "log-file", "", "NDJSON 日志文件路径")
+	cmd.PersistentFlags().BoolVar(&flags.verboseArg, "verbose", false, "输出详细 NDJSON（机器友好）")
 }
 
 func runGen(stdout, stderr *os.File, flags *genFlags, subcommand bool, showVersion *bool) func(*cobra.Command, []string) error {
@@ -104,6 +106,7 @@ func runGen(stdout, stderr *os.File, flags *genFlags, subcommand bool, showVersi
 			MaxRetries:      flags.maxRetriesArg,
 			Provider:        flags.providerArg,
 			LogFile:         flags.logFileArg,
+			Verbose:         flags.verboseArg,
 			CWD:             cwd,
 			Stdout:          stdout,
 			Stderr:          stderr,
@@ -117,7 +120,9 @@ func runGen(stdout, stderr *os.File, flags *genFlags, subcommand bool, showVersi
 		if res.Failed > 0 {
 			return fmt.Errorf("任务完成：成功 %d，失败 %d", res.Succeeded, res.Failed)
 		}
-		fmt.Fprintf(stdout, "任务完成：成功 %d，失败 %d\n", res.Succeeded, res.Failed)
+		if !flags.verboseArg {
+			fmt.Fprintf(stdout, "任务完成：成功 %d，失败 %d\n", res.Succeeded, res.Failed)
+		}
 		return nil
 	}
 }

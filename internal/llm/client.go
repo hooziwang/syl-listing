@@ -54,6 +54,8 @@ func (c *Client) Generate(ctx context.Context, req Request) (Response, error) {
 	switch provider {
 	case "openai":
 		text, err = c.generateOpenAI(ctx, req)
+	case "deepseek":
+		text, err = c.generateDeepSeek(ctx, req)
 	case "gemini":
 		text, err = c.generateGemini(ctx, req)
 	case "claude":
@@ -263,6 +265,41 @@ func (c *Client) generateClaude(ctx context.Context, req Request) (string, error
 		}
 	}
 	return "", fmt.Errorf("claude 返回文本为空")
+}
+
+func (c *Client) generateDeepSeek(ctx context.Context, req Request) (string, error) {
+	payload := map[string]any{
+		"model": req.Model,
+		"messages": []map[string]string{
+			{"role": "system", "content": req.SystemPrompt},
+			{"role": "user", "content": req.UserPrompt},
+		},
+		"stream": false,
+	}
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, joinURL(req.BaseURL, "/chat/completions"), req.APIKey, nil, payload, &resp); err != nil {
+		return "", err
+	}
+	if resp.Error != nil {
+		return "", fmt.Errorf("deepseek chat completions 错误：%s", resp.Error.Message)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("deepseek chat completions 返回为空")
+	}
+	text := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if text == "" {
+		return "", fmt.Errorf("deepseek chat completions 内容为空")
+	}
+	return text, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, endpoint, bearer string, extraHeaders map[string]string, in any, out any) error {

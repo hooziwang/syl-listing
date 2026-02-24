@@ -1,5 +1,5 @@
-provider: openai
-api_key_env: SYL_LISTING_API_KEY
+provider: deepseek
+api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
 concurrency: 0
 max_retries: 3
@@ -7,7 +7,19 @@ request_timeout_sec: 300
 output:
   dir: .
   num: 1
+translation:
+  provider: deepseek
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+  source: en
+  target: zh
 providers:
+  deepseek:
+    base_url: https://api.deepseek.com
+    api_mode: chat
+    model: deepseek-chat
+    model_reasoning_effort: ""
   openai:
     base_url: https://flux-code.cc
     api_mode: responses
