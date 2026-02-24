@@ -16,7 +16,6 @@ import (
 )
 
 type RulesSyncResult struct {
-	Enabled bool
 	Updated bool
 	Message string
 	Warning string
@@ -39,8 +38,8 @@ type githubRelease struct {
 }
 
 func SyncRulesFromCenter(cfg *Config, paths *Paths) (RulesSyncResult, error) {
-	out := RulesSyncResult{Enabled: cfg != nil && cfg.RulesCenter.Enabled}
-	if cfg == nil || paths == nil || !cfg.RulesCenter.Enabled {
+	out := RulesSyncResult{}
+	if cfg == nil || paths == nil {
 		return out, nil
 	}
 	center := cfg.RulesCenter

@@ -2,7 +2,6 @@ provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
 rules_center:
-  enabled: true
   owner: hooziwang
   repo: syl-listing-rules
   release: latest

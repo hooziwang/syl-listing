@@ -47,7 +47,6 @@ type Paths struct {
 }
 
 type RulesCenterConfig struct {
-	Enabled    bool   `yaml:"enabled"`
 	Owner      string `yaml:"owner"`
 	Repo       string `yaml:"repo"`
 	Release    string `yaml:"release"`

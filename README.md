@@ -209,7 +209,6 @@ provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
 rules_center:
-  enabled: true
   owner: hooziwang
   repo: syl-listing-rules
   release: latest
@@ -252,30 +251,6 @@ providers:
 - 标题 `max=200`，`char_tolerance=20`：可接受 `<=220`。
 - 五点 `min=230,max=320`，`char_tolerance=20`：可接受 `[210,340]`。
 
-## 独立规则仓库
-
-推荐把规则拆到独立仓库（更新频率高于代码发版时）。
-
-用模板快速初始化：
-
-```bash
-cd syl-listing
-chmod +x scripts/init_rules_repo.sh
-scripts/init_rules_repo.sh syl-listing-rules ~/work/syl-listing-rules --create-remote public
-```
-
-模板目录：
-
-- `templates/rules-repo/`
-
-该模板包含：
-
-- `rules/*.yaml`
-- `.github/workflows/release.yml`
-- `scripts/build_bundle.sh`
-
-发布 tag（例如 `rules-v2026.03.01`）后，会自动上传 `rules-bundle.tar.gz` 到规则仓库 Releases。
-
 ## 参数
 
 ```bash
@@ -297,7 +272,7 @@ scripts/init_rules_repo.sh syl-listing-rules ~/work/syl-listing-rules --create-r
 - `缺少规则文件`：
   检查规则中心发布资产是否存在，或检查 `~/.syl-listing/rules/` 本地缓存是否完整。
 - `规则中心警告：...`：
-  当 `rules_center.strict=false` 时会回退本地缓存继续运行；若要强制失败可设为 `strict=true`。
+  默认会先尝试规则中心同步；当 `rules_center.strict=false` 时会回退本地缓存继续运行；若要强制失败可设为 `strict=true`。
 - `... 为空。先复制 .../.env.example 为 .../.env 并填写 key`：
   复制并填写 `.env`，确认变量名与 `config.yaml` 对齐。
 - 生成慢或超时：
