@@ -186,9 +186,10 @@ func TestRunMissingAPIKeyValue(t *testing.T) {
 		CWD:        workDir,
 		Stdout:     ioDiscard{},
 		Stderr:     ioDiscard{},
+		Stdin:      strings.NewReader("\n"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "DEEPSEEK_API_KEY 为空") {
-		t.Fatalf("expected empty key error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "未读取到有效的 DEEPSEEK_API_KEY 输入") {
+		t.Fatalf("expected prompt eof error, got %v", err)
 	}
 }
 

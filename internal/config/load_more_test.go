@@ -68,3 +68,16 @@ func TestReadSectionRulesReadFailureNonNotExist(t *testing.T) {
 		t.Fatalf("expected read failure error, got %v", err)
 	}
 }
+
+func TestEnsureBootstrapDoesNotCreateEnvExample(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	_, paths, err := Load("", home)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if _, statErr := os.Stat(paths.EnvExample); !os.IsNotExist(statErr) {
+		t.Fatalf("env.example should not be auto-generated, statErr=%v", statErr)
+	}
+}

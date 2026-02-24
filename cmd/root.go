@@ -110,6 +110,7 @@ func runGen(stdout, stderr *os.File, flags *genFlags, subcommand bool, showVersi
 			CWD:             cwd,
 			Stdout:          stdout,
 			Stderr:          stderr,
+			Stdin:           os.Stdin,
 			InvokedSubcmd:   subcommand,
 			NormalizedInput: normalizeArgs(os.Args[1:]),
 		})

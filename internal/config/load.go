@@ -13,9 +13,6 @@ import (
 //go:embed default.yaml
 var embeddedDefaultConfig []byte
 
-//go:embed default_env.example
-var embeddedEnvExample []byte
-
 func Load(pathArg, cwd string) (*Config, *Paths, error) {
 	paths, err := resolvePaths(pathArg)
 	if err != nil {
@@ -76,9 +73,6 @@ func ensureBootstrap(paths *Paths) error {
 		return fmt.Errorf("创建配置目录失败：%w", err)
 	}
 	if err := ensureFile(paths.ConfigPath, embeddedDefaultConfig, 0o644); err != nil {
-		return err
-	}
-	if err := ensureFile(paths.EnvExample, embeddedEnvExample, 0o644); err != nil {
 		return err
 	}
 	if err := ensureRuleDir(paths.RulesDir); err != nil {

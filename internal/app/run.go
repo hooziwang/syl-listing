@@ -31,6 +31,7 @@ type Options struct {
 	CWD             string
 	Stdout          io.Writer
 	Stderr          io.Writer
+	Stdin           io.Reader
 	InvokedSubcmd   bool
 	NormalizedInput []string
 }
@@ -99,13 +100,9 @@ func Run(opts Options) (result Result, err error) {
 		return Result{}, err
 	}
 
-	envMap, err := config.LoadEnvFile(paths.EnvPath)
+	envMap, apiKey, err := ensureDeepSeekAPIKey(paths, cfg.APIKeyEnv, cfg.MaxRetries, opts.Stdout, opts.Stdin)
 	if err != nil {
-		return Result{}, fmt.Errorf("未读取到 %s。先复制 %s 为 %s 并填写 %s", paths.EnvPath, paths.EnvExample, paths.EnvPath, cfg.APIKeyEnv)
-	}
-	apiKey := strings.TrimSpace(envMap[cfg.APIKeyEnv])
-	if apiKey == "" {
-		return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.APIKeyEnv, paths.EnvExample, paths.EnvPath)
+		return Result{}, err
 	}
 	balanceAPIKey := resolveDeepSeekBalanceKey(envMap, apiKey)
 	defer func() {
