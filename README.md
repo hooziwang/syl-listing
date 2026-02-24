@@ -2,12 +2,112 @@
 
 `syl-listing` 是一个基于 Go + Cobra 的 CLI，用于把 Listing 需求 Markdown 批量生成中英 Listing Markdown 文件。
 
+参考文档与样例：
+
+- 需求模板：`doc/listing 模板-v1.md`
+- 规则参考：`doc/亚马逊Listing生成指南（中英文版）.md`
+
+## 安装
+
+### macOS（Homebrew）
+
+安装（首次/已 tap 过都可用）：
+
+```bash
+brew update && brew install hooziwang/tap/syl-listing
+```
+
+升级：
+
+```bash
+brew update && brew upgrade hooziwang/tap/syl-listing
+```
+
+如果提示 `No available formula`（本地 tap 索引过期）：
+
+```bash
+brew untap hooziwang/tap && brew install hooziwang/tap/syl-listing
+```
+
+### Windows（Scoop）
+
+安装：
+
+```powershell
+scoop update; scoop bucket add hooziwang https://github.com/hooziwang/scoop-bucket.git; scoop install syl-listing
+```
+
+升级：
+
+```powershell
+scoop update; scoop update syl-listing
+```
+
+如果提示找不到应用（bucket 索引过期）：
+
+```powershell
+scoop bucket rm hooziwang; scoop bucket add hooziwang https://github.com/hooziwang/scoop-bucket.git; scoop update; scoop install syl-listing
+```
+
+## 快速开始（1 分钟）
+
+1. 准备需求文件（首行必须是 `===Listing Requirements===`）：
+
+```md
+===Listing Requirements===
+品牌名: DemoBrand
+分类: Home & Kitchen
+关键词库:
+- keyword one
+- keyword two
+```
+
+2. 首次运行（会自动初始化 `~/.syl-listing/config.yaml`、`~/.syl-listing/rules/`、`~/.syl-listing/.env.example`）：
+
+```bash
+syl-listing demo.md
+```
+
+3. 填写密钥：
+
+```bash
+cp ~/.syl-listing/.env.example ~/.syl-listing/.env
+# 编辑 ~/.syl-listing/.env，填入可用 key
+```
+
+4. 再次运行生成：
+
+```bash
+syl-listing demo.md
+```
+
+5. 输出文件：
+
+- `listing_xxxxxxxx_en.md`
+- `listing_xxxxxxxx_cn.md`
+
 ## 命令
 
 ```bash
 syl-listing [file_or_dir ...]
 syl-listing gen [file_or_dir ...]
 syl-listing version
+```
+
+常用示例：
+
+```bash
+# 单文件
+syl-listing pinpai.md
+
+# 多文件 + 每个文件生成 3 份候选 + 指定输出目录
+syl-listing a.md b.md -n 3 -o ./out
+
+# 目录输入 + 详细 NDJSON + 日志落盘
+syl-listing ./requirements --verbose --log-file ./run.ndjson
+
+# 使用子命令形式
+syl-listing gen ./requirements -n 2
 ```
 
 ## 自动初始化
@@ -21,6 +121,22 @@ syl-listing version
 并要求手动创建：
 
 - `~/.syl-listing/.env`
+
+## .env 必填项
+
+实际读取哪个变量名由配置控制（`api_key_env`、`translation.api_key_env` 等）。常见写法：
+
+```dotenv
+# DeepSeek（默认生成/默认翻译）
+DEEPSEEK_API_KEY=
+
+# OpenAI（当 provider=openai 且 api_key_env=OPENAI_API_KEY 时）
+OPENAI_API_KEY=
+
+# 腾讯翻译（当 translation.provider=tencent_tmt 时）
+TENCENTCLOUD_SECRET_ID=
+TENCENTCLOUD_SECRET_KEY=
+```
 
 ## 规则文件（分段 + 结构化）
 
@@ -38,6 +154,26 @@ syl-listing version
 
 程序直接把该规则文件原文作为 `system`，并解析同一文件做校验，不做二次拼接。
 `~/.syl-listing/rules` 是唯一规则定义源；缺少任一规则文件会直接报错。
+
+`title.yaml` 最小示例：
+
+```yaml
+version: 1
+section: title
+language: en
+purpose: 生成英文标题
+output:
+  format: text
+  lines: 1
+constraints:
+  max_chars:
+    value: 200
+    hard: true
+instruction: |
+  只输出 1 行英文标题，不要解释。
+```
+
+`bullets.yaml`、`description.yaml`、`search_terms.yaml` 与此结构一致，仅 `section`、`output`、`constraints` 不同。
 
 ## 生成流程
 
@@ -106,16 +242,65 @@ providers:
 翻译配置可在 `translation` 节点覆盖；当前支持 `tencent_tmt` 和 `deepseek`。
 `char_tolerance` 用于字符数校验容差（默认 20）：若规则只有 `max`，则放宽为 `(-inf,max+20]`；若规则同时有 `min/max`，则放宽为 `[min-20,max+20]`。
 
+## 校验与容差
+
+- 规则区间：规则文件里定义的原始区间（例如 `max_chars=200` 或 `min/max=230/320`）。
+- 容差区间：在规则区间基础上按 `char_tolerance` 放宽后的区间。
+- 放行策略：
+  - 命中规则区间：直接通过。
+  - 未命中规则区间，但命中容差区间：通过，并输出 `校验提示`。
+  - 未命中容差区间：判失败并重试。
+
+示例：
+
+- 标题 `max=200`，`char_tolerance=20`：可接受 `<=220`。
+- 五点 `min=230,max=320`，`char_tolerance=20`：可接受 `[210,340]`。
+
 ## 参数
 
 ```bash
 --config        配置文件路径，默认 ~/.syl-listing/config.yaml
 -o, --out       输出目录
 -n, --num       每个需求文件生成候选数量
---concurrency   保留参数（当前版本不限制并发）
+--concurrency   保留参数（当前版本不限制并发，传入值不生效）
 --max-retries   最大重试次数
 --provider      覆盖配置中的 provider
 --verbose       终端输出详细 NDJSON（机器友好）
 --log-file      NDJSON 日志文件路径
 -v, --version   版本
 ```
+
+## 故障排查
+
+- `文件不是 listing 需求格式（缺少首行标志）`：
+  检查首个非空行是否为 `===Listing Requirements===`。
+- `缺少规则文件`：
+  检查 `~/.syl-listing/rules/` 下 4 个规则文件是否齐全。
+- `... 为空。先复制 .../.env.example 为 .../.env 并填写 key`：
+  复制并填写 `.env`，确认变量名与 `config.yaml` 对齐。
+- 生成慢或超时：
+  降低 `max_retries`，调整 `request_timeout_sec`，或切换更快模型。
+- 翻译失败：
+  检查 `translation.provider` 与对应密钥是否匹配（DeepSeek 或 Tencent）。
+
+## 退出码与自动化集成
+
+- 全部成功：退出码 `0`。
+- 只要有失败（部分失败/全部失败）：退出码 `1`。
+- 默认输出人类可读进度，`--verbose` 输出 NDJSON，适合脚本解析。
+
+## 安全与成本提示
+
+- `.env` 含密钥，不要提交到仓库。
+- `--verbose` 可能包含 system/user prompt 与模型返回文本，注意日志脱敏。
+- 模型与翻译调用会产生费用；建议按需设置重试次数与超时。
+
+## 自动发布
+
+- 已内置 GoReleaser 配置：`.goreleaser.yml`
+- 已内置 GitHub Actions 发布流：`.github/workflows/release.yml`
+- 触发方式：推送 tag（`v*`）或手动触发 `release` workflow
+- 发布产物：GitHub Release + checksums + Homebrew Formula + Scoop Manifest
+- 需要的仓库密钥：
+  - `HOMEBREW_TAP_GITHUB_TOKEN`
+  - `SCOOP_BUCKET_GITHUB_TOKEN`

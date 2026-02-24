@@ -1,0 +1,79 @@
+version: 2
+
+project_name: syl-listing
+
+builds:
+  - id: syl-listing
+    main: .
+    binary: syl-listing
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - >-
+        -s -w
+        -X syl-listing/cmd.Version={{ .Version }}
+        -X syl-listing/cmd.Commit={{ .Commit }}
+        -X syl-listing/cmd.BuildTime={{ .Date }}
+
+archives:
+  - id: default
+    builds:
+      - syl-listing
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: hooziwang
+    name: syl-listing
+  prerelease: auto
+
+brews:
+  - name: syl-listing
+    repository:
+      owner: hooziwang
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/hooziwang/syl-listing"
+    description: "基于 Go + Cobra 的 Amazon Listing 中英双语生成工具"
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    test: |
+      system "#{bin}/syl-listing", "--version"
+
+scoops:
+  - name: syl-listing
+    repository:
+      owner: hooziwang
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: "https://github.com/hooziwang/syl-listing"
+    description: "基于 Go + Cobra 的 Amazon Listing 中英双语生成工具"
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
