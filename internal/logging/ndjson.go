@@ -127,7 +127,7 @@ func (l *Logger) formatHuman(ev Event) string {
 	case "generate_failed":
 		return fmt.Sprintf("[%s] 生成失败：%s", l.jobTag(ev), fallback(ev.Error, "-"))
 	case "generate_ok":
-		return fmt.Sprintf("[%s] %s生成完成（%dms）", l.jobTag(ev), strings.ToUpper(fallback(ev.Lang, "-")), ev.LatencyMS)
+		return fmt.Sprintf("[%s] %s生成完成（%s）", l.jobTag(ev), strings.ToUpper(fallback(ev.Lang, "-")), formatHumanDurationMS(ev.LatencyMS))
 	case "write_failed":
 		return fmt.Sprintf("[%s] %s 写入失败：%s", l.jobTag(ev), fallback(ev.OutputFile, "-"), fallback(ev.Error, "-"))
 	case "write_ok":
@@ -144,7 +144,7 @@ func (l *Logger) formatHuman(ev Event) string {
 	}
 	if strings.HasPrefix(ev.Event, "retry_backoff_") {
 		step := strings.TrimPrefix(ev.Event, "retry_backoff_")
-		return fmt.Sprintf("[%s] %s 重试等待 %dms：%s", l.jobTag(ev), humanStepLabel(step), ev.WaitMS, fallback(ev.Error, "-"))
+		return fmt.Sprintf("[%s] %s 重试等待 %s：%s", l.jobTag(ev), humanStepLabel(step), formatHumanDurationMS(ev.WaitMS), fallback(ev.Error, "-"))
 	}
 	if strings.HasPrefix(ev.Event, "api_error_") {
 		step := strings.TrimPrefix(ev.Event, "api_error_")
@@ -177,7 +177,7 @@ func (l *Logger) humanAPIResponse(ev Event) string {
 	}
 	return l.onceLine(
 		l.jobTag(ev)+":resp:"+groupKey,
-		fmt.Sprintf("[%s] %s（%dms）", l.jobTag(ev), label, ev.LatencyMS),
+		fmt.Sprintf("[%s] %s（%s）", l.jobTag(ev), label, formatHumanDurationMS(ev.LatencyMS)),
 	)
 }
 
@@ -290,4 +290,22 @@ func indexedStepIsOne(step, prefix string) bool {
 		return false
 	}
 	return strings.TrimSpace(strings.TrimPrefix(step, prefix)) == "1"
+}
+
+func formatHumanDurationMS(ms int64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if ms < 60_000 {
+		return fmt.Sprintf("%.2fs", float64(ms)/1000.0)
+	}
+	minutes := ms / 60_000
+	remainMS := ms % 60_000
+	if remainMS == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm%.1fs", minutes, float64(remainMS)/1000.0)
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"syl-listing/internal/config"
@@ -34,6 +33,8 @@ type bilingualGenerateOptions struct {
 }
 
 func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingDocument, ListingDocument, int64, int64, error) {
+	startAt := time.Now()
+	var enElapsedMS int64
 	enDoc := ListingDocument{
 		Keywords: append([]string{}, opts.Req.Keywords...),
 		Category: strings.TrimSpace(opts.Req.Category),
@@ -42,8 +43,6 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		Keywords: make([]string, 0, len(opts.Req.Keywords)),
 		Category: "",
 	}
-	var enLatencyTotal int64
-	var cnLatencyTotal atomic.Int64
 
 	cnBullets := make([]string, opts.Rules.BulletCount())
 	cnDesc := make([]string, opts.Rules.DescriptionParagraphs())
@@ -67,7 +66,7 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		translateWG.Add(1)
 		go func() {
 			defer translateWG.Done()
-			translated, latency, err := translateSectionWithRetry(translateSectionOptions{
+			translated, _, err := translateSectionWithRetry(translateSectionOptions{
 				Req:         opts.Req,
 				Section:     section,
 				SourceText:  sourceText,
@@ -84,7 +83,6 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 				recordTranslateErr(err)
 				return
 			}
-			cnLatencyTotal.Add(latency)
 			onSuccess(strings.TrimSpace(translated))
 		}()
 	}
@@ -92,7 +90,7 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		translateWG.Add(1)
 		go func() {
 			defer translateWG.Done()
-			translated, latency, err := translateSectionsBatchWithRetry(translateBatchOptions{
+			translated, _, err := translateSectionsBatchWithRetry(translateBatchOptions{
 				Req:         opts.Req,
 				Section:     section,
 				SourceTexts: sourceTexts,
@@ -109,7 +107,6 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 				recordTranslateErr(err)
 				return
 			}
-			cnLatencyTotal.Add(latency)
 			onSuccess(translated)
 		}()
 	}
@@ -147,34 +144,34 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 	}
 
 	title, latency, err := generateSectionWithRetry(enSectionOpts, "title", enDoc)
-	enLatencyTotal += latency
+	_ = latency
 	if err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	enDoc.Title = cleanTitleLine(title)
 	scheduleTranslate("title", enDoc.Title, func(v string) { cnDoc.Title = cleanTitleLine(v) })
 
 	bulletRule, err := opts.Rules.Get("bullets")
 	if err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	var enBullets []string
 	if strings.EqualFold(opts.Provider, "deepseek") {
 		items, itemLatency, itemErr := generateBulletsLineByLine(enSectionOpts, enDoc, bulletRule)
-		enLatencyTotal += itemLatency
+		_ = itemLatency
 		if itemErr != nil {
-			return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), itemErr
+			return ListingDocument{}, ListingDocument{}, 0, 0, itemErr
 		}
 		enBullets = items
 	} else {
 		bulletsText, sectionLatency, sectionErr := generateSectionWithRetry(enSectionOpts, "bullets", enDoc)
-		enLatencyTotal += sectionLatency
+		_ = sectionLatency
 		if sectionErr != nil {
-			return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), sectionErr
+			return ListingDocument{}, ListingDocument{}, 0, 0, sectionErr
 		}
 		items, parseErr := parseBullets(bulletsText, opts.Rules.BulletCount())
 		if parseErr != nil {
-			return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), parseErr
+			return ListingDocument{}, ListingDocument{}, 0, 0, parseErr
 		}
 		enBullets = items
 	}
@@ -196,13 +193,13 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 	}
 
 	descText, latency, err := generateSectionWithRetry(enSectionOpts, "description", enDoc)
-	enLatencyTotal += latency
+	_ = latency
 	if err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	enDesc, err := parseParagraphs(descText, opts.Rules.DescriptionParagraphs())
 	if err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	enDoc.DescriptionParagraphs = enDesc
 	if isBatchTranslationProvider(opts.Translation.Provider) {
@@ -222,52 +219,53 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 	}
 
 	search, latency, err := generateSectionWithRetry(enSectionOpts, "search_terms", enDoc)
-	enLatencyTotal += latency
+	_ = latency
 	if err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	enDoc.SearchTerms = cleanSearchTermsLine(search)
+	enElapsedMS = time.Since(startAt).Milliseconds()
 	scheduleTranslate("search_terms", enDoc.SearchTerms, func(v string) { cnDoc.SearchTerms = cleanSearchTermsLine(v) })
 
 	translateWG.Wait()
 	if translateErr != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), translateErr
+		return ListingDocument{}, ListingDocument{}, 0, 0, translateErr
 	}
 	cnDoc.Keywords = cnKeywords
 	cnDoc.BulletPoints = cnBullets
 	cnDoc.DescriptionParagraphs = cnDesc
 	for i, bp := range cnDoc.BulletPoints {
 		if strings.TrimSpace(bp) == "" {
-			return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), fmt.Errorf("cn bullets 校验失败：第%d点为空", i+1)
+			return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("cn bullets 校验失败：第%d点为空", i+1)
 		}
 	}
 	for i, p := range cnDoc.DescriptionParagraphs {
 		if strings.TrimSpace(p) == "" {
-			return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), fmt.Errorf("cn description 校验失败：第%d段为空", i+1)
+			return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("cn description 校验失败：第%d段为空", i+1)
 		}
 	}
 	if strings.TrimSpace(cnDoc.Title) == "" {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), fmt.Errorf("cn title 校验失败：为空")
+		return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("cn title 校验失败：为空")
 	}
 	if strings.TrimSpace(cnDoc.Category) == "" {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), fmt.Errorf("cn category 校验失败：为空")
+		return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("cn category 校验失败：为空")
 	}
 	for i, kw := range cnDoc.Keywords {
 		if strings.TrimSpace(kw) == "" {
-			return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), fmt.Errorf("cn keywords 校验失败：第%d项为空", i+1)
+			return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("cn keywords 校验失败：第%d项为空", i+1)
 		}
 	}
 	if strings.TrimSpace(cnDoc.SearchTerms) == "" {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), fmt.Errorf("cn search_terms 校验失败：为空")
+		return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("cn search_terms 校验失败：为空")
 	}
 
 	if err := validateDocumentBySectionRules("en", opts.Req, enDoc, opts.Rules); err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	if err := validateDocumentBySectionRules("cn", opts.Req, cnDoc, opts.Rules); err != nil {
-		return ListingDocument{}, ListingDocument{}, enLatencyTotal, cnLatencyTotal.Load(), err
+		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
-	return enDoc, cnDoc, enLatencyTotal, cnLatencyTotal.Load(), nil
+	return enDoc, cnDoc, enElapsedMS, time.Since(startAt).Milliseconds(), nil
 }
 
 type translateSectionOptions struct {

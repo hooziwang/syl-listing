@@ -38,6 +38,7 @@ type Options struct {
 type Result struct {
 	Succeeded int
 	Failed    int
+	ElapsedMS int64
 }
 
 type candidateJob struct {
@@ -46,6 +47,7 @@ type candidateJob struct {
 }
 
 func Run(opts Options) (Result, error) {
+	runStartedAt := time.Now()
 	cwd := strings.TrimSpace(opts.CWD)
 	if cwd == "" {
 		wd, err := os.Getwd()
@@ -151,6 +153,7 @@ func Run(opts Options) (Result, error) {
 
 	if len(validReqs) == 0 {
 		if result.Failed > 0 {
+			result.ElapsedMS = time.Since(runStartedAt).Milliseconds()
 			return result, nil
 		}
 		return result, fmt.Errorf("没有可生成的需求文件")
@@ -211,6 +214,7 @@ func Run(opts Options) (Result, error) {
 			result.Failed++
 		}
 	}
+	result.ElapsedMS = time.Since(runStartedAt).Milliseconds()
 	logger.Emit(logging.Event{Event: "finished", Attempt: result.Succeeded + result.Failed, Error: fmt.Sprintf("success=%d failed=%d", result.Succeeded, result.Failed)})
 	return result, nil
 }
