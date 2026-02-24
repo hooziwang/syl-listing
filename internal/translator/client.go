@@ -132,7 +132,8 @@ func (c *Client) translateDeepSeek(ctx context.Context, req Request) (Response, 
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": req.UserPrompt},
 		},
-		"stream": false,
+		"temperature": 1.3,
+		"stream":      false,
 	}
 
 	start := time.Now()

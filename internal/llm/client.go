@@ -275,7 +275,8 @@ func (c *Client) generateDeepSeek(ctx context.Context, req Request) (string, err
 			{"role": "system", "content": req.SystemPrompt},
 			{"role": "user", "content": req.UserPrompt},
 		},
-		"stream": false,
+		"temperature": 1.0,
+		"stream":      false,
 	}
 	if req.JSONMode {
 		payload["response_format"] = map[string]string{"type": "json_object"}
