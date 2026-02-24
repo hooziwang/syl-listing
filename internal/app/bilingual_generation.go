@@ -17,6 +17,7 @@ import (
 
 type bilingualGenerateOptions struct {
 	Req             listing.Requirement
+	CharTolerance   int
 	Provider        string
 	ProviderCfg     config.ProviderConfig
 	Translation     config.TranslationConfig
@@ -131,16 +132,17 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 	}
 
 	enSectionOpts := sectionGenerateOptions{
-		Req:         opts.Req,
-		Lang:        "en",
-		Provider:    opts.Provider,
-		ProviderCfg: opts.ProviderCfg,
-		APIKey:      opts.APIKey,
-		Rules:       opts.Rules,
-		MaxRetries:  opts.MaxRetries,
-		Client:      opts.Client,
-		Logger:      opts.Logger,
-		Candidate:   opts.Candidate,
+		Req:           opts.Req,
+		Lang:          "en",
+		CharTolerance: opts.CharTolerance,
+		Provider:      opts.Provider,
+		ProviderCfg:   opts.ProviderCfg,
+		APIKey:        opts.APIKey,
+		Rules:         opts.Rules,
+		MaxRetries:    opts.MaxRetries,
+		Client:        opts.Client,
+		Logger:        opts.Logger,
+		Candidate:     opts.Candidate,
 	}
 
 	title, latency, err := generateSectionWithRetry(enSectionOpts, "title", enDoc)

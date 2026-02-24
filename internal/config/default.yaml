@@ -1,6 +1,7 @@
 provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
+char_tolerance: 20
 concurrency: 0
 max_retries: 3
 request_timeout_sec: 300

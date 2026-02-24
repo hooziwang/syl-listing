@@ -15,16 +15,17 @@ import (
 )
 
 type sectionGenerateOptions struct {
-	Req         listing.Requirement
-	Lang        string
-	Provider    string
-	ProviderCfg config.ProviderConfig
-	APIKey      string
-	Rules       config.SectionRules
-	MaxRetries  int
-	Client      *llm.Client
-	Logger      *logging.Logger
-	Candidate   int
+	Req           listing.Requirement
+	Lang          string
+	CharTolerance int
+	Provider      string
+	ProviderCfg   config.ProviderConfig
+	APIKey        string
+	Rules         config.SectionRules
+	MaxRetries    int
+	Client        *llm.Client
+	Logger        *logging.Logger
+	Candidate     int
 }
 
 func generateDocumentBySections(opts sectionGenerateOptions) (ListingDocument, int64, error) {
@@ -177,7 +178,18 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 		if step == "search_terms" {
 			text = cleanSearchTermsLine(text)
 		}
-		issues := validateSectionText(step, opts.Lang, opts.Req, text, sectionRule)
+		issues, warnings := validateSectionText(step, opts.Lang, opts.Req, text, sectionRule, opts.CharTolerance)
+		for _, w := range warnings {
+			opts.Logger.Emit(logging.Event{
+				Level:     "warn",
+				Event:     "validation_warning",
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Attempt:   attempt,
+				Error:     w,
+			})
+		}
 		if len(issues) > 0 {
 			lastIssues = "- " + strings.Join(issues, "\n- ")
 			opts.Logger.Emit(logging.Event{Level: "warn", Event: "validate_error_" + step, Input: opts.Req.SourcePath, Candidate: opts.Candidate, Lang: opts.Lang, Attempt: attempt, Error: strings.Join(issues, "; ")})
@@ -303,11 +315,29 @@ func generateBulletsLineByLine(opts sectionGenerateOptions, doc ListingDocument,
 				issues = append(issues, fmt.Sprintf("第%d条为空", idx))
 			}
 			n := runeLen(line)
-			if minLen > 0 && n < minLen {
-				issues = append(issues, fmt.Sprintf("第%d条太短：%d < %d", idx, n, minLen))
-			}
-			if maxLen > 0 && n > maxLen {
-				issues = append(issues, fmt.Sprintf("第%d条太长：%d > %d", idx, n, maxLen))
+			bounds := resolveCharBounds(minLen, maxLen, opts.CharTolerance)
+			if bounds.hasRule() {
+				switch {
+				case bounds.inRule(n):
+				case bounds.inTolerance(n):
+					opts.Logger.Emit(logging.Event{
+						Level:     "warn",
+						Event:     "validation_warning",
+						Input:     opts.Req.SourcePath,
+						Candidate: opts.Candidate,
+						Lang:      opts.Lang,
+						Attempt:   attempt,
+						Error: fmt.Sprintf(
+							"第%d条长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行",
+							idx,
+							n,
+							bounds.ruleText(),
+							bounds.toleranceText(),
+						),
+					})
+				default:
+					issues = append(issues, fmt.Sprintf("第%d条长度超出容差区间：%d 不在 %s（规则区间 %s）", idx, n, bounds.toleranceText(), bounds.ruleText()))
+				}
 			}
 			if len(issues) > 0 {
 				lastIssues = "- " + strings.Join(issues, "\n- ")
@@ -380,18 +410,25 @@ func buildSectionUserPrompt(step string, req listing.Requirement, doc ListingDoc
 	return b.String()
 }
 
-func validateSectionText(step, lang string, req listing.Requirement, text string, rule config.SectionRuleFile) []string {
+func validateSectionText(step, lang string, req listing.Requirement, text string, rule config.SectionRuleFile, tolerance int) ([]string, []string) {
 	issues := make([]string, 0)
+	warnings := make([]string, 0)
 	switch step {
 	case "title":
 		t := cleanTitleLine(text)
 		if t == "" {
 			issues = append(issues, "标题为空")
-			return issues
+			return issues, warnings
 		}
 		max := rule.Parsed.Constraints.MaxChars.Value
-		if runeLen(t) > max {
-			issues = append(issues, fmt.Sprintf("标题超长：%d > %d", runeLen(t), max))
+		n := runeLen(t)
+		bounds := resolveCharBounds(0, max, tolerance)
+		if bounds.hasRule() && !bounds.inRule(n) {
+			if bounds.inTolerance(n) {
+				warnings = append(warnings, fmt.Sprintf("标题长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行", n, bounds.ruleText(), bounds.toleranceText()))
+			} else {
+				issues = append(issues, fmt.Sprintf("标题长度超出容差区间：%d 不在 %s（规则区间 %s）", n, bounds.toleranceText(), bounds.ruleText()))
+			}
 		}
 		if lang == "en" {
 			topN := rule.Parsed.Constraints.MustContainTopNKeywords.Value
@@ -413,17 +450,19 @@ func validateSectionText(step, lang string, req listing.Requirement, text string
 		items, err := parseBullets(text, expected)
 		if err != nil {
 			issues = append(issues, err.Error())
-			return issues
+			return issues, warnings
 		}
 		for i, it := range items {
 			n := runeLen(it)
 			minLen := rule.Parsed.Constraints.MinCharsPerLine.Value
 			maxLen := rule.Parsed.Constraints.MaxCharsPerLine.Value
-			if minLen > 0 && n < minLen {
-				issues = append(issues, fmt.Sprintf("第%d点太短：%d < %d", i+1, n, minLen))
-			}
-			if maxLen > 0 && n > maxLen {
-				issues = append(issues, fmt.Sprintf("第%d点太长：%d > %d", i+1, n, maxLen))
+			bounds := resolveCharBounds(minLen, maxLen, tolerance)
+			if bounds.hasRule() && !bounds.inRule(n) {
+				if bounds.inTolerance(n) {
+					warnings = append(warnings, fmt.Sprintf("第%d点长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行", i+1, n, bounds.ruleText(), bounds.toleranceText()))
+				} else {
+					issues = append(issues, fmt.Sprintf("第%d点长度超出容差区间：%d 不在 %s（规则区间 %s）", i+1, n, bounds.toleranceText(), bounds.ruleText()))
+				}
 			}
 		}
 	case "description":
@@ -431,7 +470,7 @@ func validateSectionText(step, lang string, req listing.Requirement, text string
 		pars, err := parseParagraphs(text, expected)
 		if err != nil {
 			issues = append(issues, err.Error())
-			return issues
+			return issues, warnings
 		}
 		for i, p := range pars {
 			if strings.TrimSpace(p) == "" {
@@ -442,17 +481,129 @@ func validateSectionText(step, lang string, req listing.Requirement, text string
 		line := cleanSearchTermsLine(text)
 		if line == "" {
 			issues = append(issues, "搜索词为空")
-			return issues
+			return issues, warnings
 		}
 		if countNonEmptyLines(text) != rule.Parsed.Output.Lines {
 			issues = append(issues, fmt.Sprintf("搜索词行数错误：%d != %d", countNonEmptyLines(text), rule.Parsed.Output.Lines))
 		}
 		max := rule.Parsed.Constraints.MaxChars.Value
-		if max > 0 && runeLen(line) > max {
-			issues = append(issues, fmt.Sprintf("搜索词超长：%d > %d", runeLen(line), max))
+		n := runeLen(line)
+		bounds := resolveCharBounds(0, max, tolerance)
+		if bounds.hasRule() && !bounds.inRule(n) {
+			if bounds.inTolerance(n) {
+				warnings = append(warnings, fmt.Sprintf("搜索词长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行", n, bounds.ruleText(), bounds.toleranceText()))
+			} else {
+				issues = append(issues, fmt.Sprintf("搜索词长度超出容差区间：%d 不在 %s（规则区间 %s）", n, bounds.toleranceText(), bounds.ruleText()))
+			}
 		}
 	}
-	return dedupeIssues(issues)
+	return dedupeIssues(issues), dedupeIssues(warnings)
+}
+
+type charBounds struct {
+	ruleMin int
+	ruleMax int
+	tolMin  int
+	tolMax  int
+	hasMin  bool
+	hasMax  bool
+}
+
+func resolveCharBounds(minConstraint, maxConstraint, tolerance int) charBounds {
+	if tolerance < 0 {
+		tolerance = 0
+	}
+	minC := minConstraint
+	maxC := maxConstraint
+	if minC > 0 && maxC > 0 && minC > maxC {
+		minC, maxC = maxC, minC
+	}
+
+	out := charBounds{
+		ruleMin: minC,
+		ruleMax: maxC,
+		tolMin:  minC,
+		tolMax:  maxC,
+		hasMin:  minC > 0,
+		hasMax:  maxC > 0,
+	}
+
+	switch {
+	case minC > 0 && maxC > 0:
+		out.tolMin = minC - tolerance
+		if out.tolMin < 0 {
+			out.tolMin = 0
+		}
+		out.tolMax = maxC + tolerance
+	case maxC > 0:
+		out.hasMin = false
+		out.tolMin = 0
+		out.tolMax = maxC + tolerance
+	case minC > 0:
+		out.tolMin = minC - tolerance
+		if out.tolMin < 0 {
+			out.tolMin = 0
+		}
+		out.hasMax = false
+		out.tolMax = 0
+	default:
+		out.hasMin = false
+		out.hasMax = false
+		out.tolMin = 0
+		out.tolMax = 0
+	}
+	return out
+}
+
+func (b charBounds) hasRule() bool {
+	return b.hasMin || b.hasMax
+}
+
+func (b charBounds) inRule(n int) bool {
+	if !b.hasRule() {
+		return true
+	}
+	if b.hasMin && n < b.ruleMin {
+		return false
+	}
+	if b.hasMax && n > b.ruleMax {
+		return false
+	}
+	return true
+}
+
+func (b charBounds) inTolerance(n int) bool {
+	if !b.hasRule() {
+		return true
+	}
+	if b.hasMin && n < b.tolMin {
+		return false
+	}
+	if b.hasMax && n > b.tolMax {
+		return false
+	}
+	return true
+}
+
+func (b charBounds) ruleText() string {
+	return formatRangeText(b.ruleMin, b.ruleMax, b.hasMin, b.hasMax)
+}
+
+func (b charBounds) toleranceText() string {
+	return formatRangeText(b.tolMin, b.tolMax, b.hasMin, b.hasMax)
+}
+
+func formatRangeText(minV, maxV int, hasMin, hasMax bool) string {
+	switch {
+	case hasMin && hasMax:
+		return fmt.Sprintf("[%d,%d]", minV, maxV)
+	case hasMin:
+		return fmt.Sprintf("[%d,+inf)", minV)
+	case hasMax:
+		return fmt.Sprintf("(-inf,%d]", maxV)
+	default:
+		return "(-inf,+inf)"
+	}
 }
 
 var bulletPrefixRe = regexp.MustCompile(`^\s*(?:[-*•]|[0-9]{1,2}[\.)])\s*`)

@@ -76,6 +76,7 @@ syl-listing version
 provider: deepseek
 api_key_env: DEEPSEEK_API_KEY
 rules_dir: ~/.syl-listing/rules
+char_tolerance: 20
 concurrency: 0
 max_retries: 3
 request_timeout_sec: 300
@@ -103,6 +104,7 @@ providers:
 ```
 
 翻译配置可在 `translation` 节点覆盖；当前支持 `tencent_tmt` 和 `deepseek`。
+`char_tolerance` 用于字符数校验容差（默认 20）：若规则只有 `max`，则放宽为 `(-inf,max+20]`；若规则同时有 `min/max`，则放宽为 `[min-20,max+20]`。
 
 ## 参数
 

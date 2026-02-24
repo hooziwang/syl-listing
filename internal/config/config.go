@@ -6,6 +6,7 @@ type Config struct {
 	Provider          string                    `yaml:"provider"`
 	APIKeyEnv         string                    `yaml:"api_key_env"`
 	RulesDir          string                    `yaml:"rules_dir"`
+	CharTolerance     int                       `yaml:"char_tolerance"`
 	Concurrency       int                       `yaml:"concurrency"`
 	MaxRetries        int                       `yaml:"max_retries"`
 	RequestTimeoutSec int                       `yaml:"request_timeout_sec"`
@@ -62,6 +63,9 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.RulesDir) == "" {
 		c.RulesDir = "~/.syl-listing/rules"
+	}
+	if c.CharTolerance <= 0 {
+		c.CharTolerance = 20
 	}
 	if c.Concurrency <= 0 {
 		c.Concurrency = 0

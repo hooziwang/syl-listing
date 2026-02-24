@@ -42,6 +42,7 @@ type Event struct {
 	SourceTexts   []string `json:"source_texts,omitempty"`
 	ResponseText  string   `json:"response_text,omitempty"`
 	ResponseTexts []string `json:"response_texts,omitempty"`
+	Balance       string   `json:"balance,omitempty"`
 }
 
 func New(stdout io.Writer, logFile string, verbose bool, showCandidate bool) (*Logger, io.Closer, error) {
@@ -132,6 +133,10 @@ func (l *Logger) formatHuman(ev Event) string {
 		return fmt.Sprintf("[%s] %s 写入失败：%s", l.jobTag(ev), fallback(ev.OutputFile, "-"), fallback(ev.Error, "-"))
 	case "write_ok":
 		return fmt.Sprintf("[%s] %s 已写入：%s", l.jobTag(ev), strings.ToUpper(fallback(ev.Lang, "-")), fallback(ev.OutputFile, "-"))
+	case "balance":
+		return ""
+	case "balance_failed":
+		return ""
 	case "finished":
 		return ""
 	}

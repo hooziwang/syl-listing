@@ -39,6 +39,7 @@ type Result struct {
 	Succeeded int
 	Failed    int
 	ElapsedMS int64
+	Balance   string
 }
 
 type candidateJob struct {
@@ -46,7 +47,7 @@ type candidateJob struct {
 	Candidate int
 }
 
-func Run(opts Options) (Result, error) {
+func Run(opts Options) (result Result, err error) {
 	runStartedAt := time.Now()
 	cwd := strings.TrimSpace(opts.CWD)
 	if cwd == "" {
@@ -110,6 +111,17 @@ func Run(opts Options) (Result, error) {
 	if closer != nil {
 		defer closer.Close()
 	}
+	balanceAPIKey := resolveDeepSeekBalanceKey(cfg, envMap, apiKey, translateAPIKey)
+	defer func() {
+		balance, fetchErr := fetchDeepSeekBalanceWithRetry(balanceAPIKey, cfg.MaxRetries)
+		if fetchErr != nil {
+			result.Balance = "查询失败"
+			logger.Emit(logging.Event{Level: "warn", Event: "balance_failed", Error: fetchErr.Error()})
+			return
+		}
+		result.Balance = formatBalanceForSummary(balance)
+		logger.Emit(logging.Event{Event: "balance", Balance: balance})
+	}()
 
 	logger.Emit(logging.Event{Event: "startup", Provider: cfg.Provider, Model: providerCfg.Model})
 	logger.Emit(logging.Event{Event: "config_loaded", Input: paths.ConfigSource})
@@ -127,7 +139,6 @@ func Run(opts Options) (Result, error) {
 	}
 
 	validReqs := make([]listing.Requirement, 0, len(discoverRes.Files))
-	result := Result{}
 	for _, file := range discoverRes.Files {
 		req, parseErr := listing.ParseFile(file)
 		if parseErr != nil {
@@ -186,6 +197,7 @@ func Run(opts Options) (Result, error) {
 					ok := processCandidate(processCandidateOptions{
 						Job:             j,
 						OutDir:          outDir,
+						CharTolerance:   cfg.CharTolerance,
 						Provider:        cfg.Provider,
 						ProviderCfg:     providerCfg,
 						Translation:     cfg.Translation,
@@ -222,6 +234,7 @@ func Run(opts Options) (Result, error) {
 type processCandidateOptions struct {
 	Job             candidateJob
 	OutDir          string
+	CharTolerance   int
 	Provider        string
 	ProviderCfg     config.ProviderConfig
 	Translation     config.TranslationConfig
@@ -246,6 +259,7 @@ func processCandidate(opts processCandidateOptions) bool {
 
 	enDoc, cnDoc, enLatency, cnLatency, err := generateENAndTranslateCNBySections(bilingualGenerateOptions{
 		Req:             opts.Job.Req,
+		CharTolerance:   opts.CharTolerance,
 		Provider:        opts.Provider,
 		ProviderCfg:     opts.ProviderCfg,
 		Translation:     opts.Translation,

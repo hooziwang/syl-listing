@@ -117,11 +117,18 @@ func runGen(stdout, stderr *os.File, flags *genFlags, subcommand bool, showVersi
 			return err
 		}
 
+		finalLine := fmt.Sprintf(
+			"任务完成：成功 %d，失败 %d，总耗时 %s，余额：%s",
+			res.Succeeded,
+			res.Failed,
+			formatDurationMS(res.ElapsedMS),
+			formatSummaryBalance(res.Balance),
+		)
 		if res.Failed > 0 {
-			return fmt.Errorf("任务完成：成功 %d，失败 %d，总耗时 %s", res.Succeeded, res.Failed, formatDurationMS(res.ElapsedMS))
+			return fmt.Errorf(finalLine)
 		}
 		if !flags.verboseArg {
-			fmt.Fprintf(stdout, "任务完成：成功 %d，失败 %d，总耗时 %s\n", res.Succeeded, res.Failed, formatDurationMS(res.ElapsedMS))
+			fmt.Fprintln(stdout, finalLine)
 		}
 		return nil
 	}
@@ -143,6 +150,13 @@ func formatDurationMS(ms int64) string {
 		return fmt.Sprintf("%dm", minutes)
 	}
 	return fmt.Sprintf("%dm%.1fs", minutes, float64(remainMS)/1000.0)
+}
+
+func formatSummaryBalance(balance string) string {
+	if strings.TrimSpace(balance) == "" {
+		return "查询失败"
+	}
+	return strings.TrimSpace(balance)
 }
 
 func normalizeArgs(args []string) []string {
