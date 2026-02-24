@@ -12,11 +12,12 @@ import (
 )
 
 type Logger struct {
-	mu           sync.Mutex
-	verbose      bool
-	ndjsonWriter io.Writer
-	humanWriter  io.Writer
-	onceKeys     map[string]struct{}
+	mu            sync.Mutex
+	verbose       bool
+	showCandidate bool
+	ndjsonWriter  io.Writer
+	humanWriter   io.Writer
+	onceKeys      map[string]struct{}
 }
 
 type Event struct {
@@ -43,10 +44,11 @@ type Event struct {
 	ResponseTexts []string `json:"response_texts,omitempty"`
 }
 
-func New(stdout io.Writer, logFile string, verbose bool) (*Logger, io.Closer, error) {
+func New(stdout io.Writer, logFile string, verbose bool, showCandidate bool) (*Logger, io.Closer, error) {
 	logger := &Logger{
-		verbose:  verbose,
-		onceKeys: make(map[string]struct{}),
+		verbose:       verbose,
+		showCandidate: showCandidate,
+		onceKeys:      make(map[string]struct{}),
 	}
 
 	if verbose {
@@ -194,7 +196,7 @@ func (l *Logger) jobTag(ev Event) string {
 	} else {
 		base = filepath.Base(base)
 	}
-	if ev.Candidate > 0 {
+	if l.showCandidate && ev.Candidate > 0 {
 		return fmt.Sprintf("%s#%d", base, ev.Candidate)
 	}
 	return base

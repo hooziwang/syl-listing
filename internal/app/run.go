@@ -101,7 +101,7 @@ func Run(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("翻译 provider 仅支持 tencent_tmt/deepseek，当前：%s", cfg.Translation.Provider)
 	}
 
-	logger, closer, err := logging.New(opts.Stdout, opts.LogFile, opts.Verbose)
+	logger, closer, err := logging.New(opts.Stdout, opts.LogFile, opts.Verbose, cfg.Output.Num > 1)
 	if err != nil {
 		return Result{}, fmt.Errorf("初始化日志失败：%w", err)
 	}

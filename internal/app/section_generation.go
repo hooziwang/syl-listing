@@ -175,12 +175,7 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 		}
 		opts.Logger.Emit(respEvent)
 		if step == "search_terms" {
-			line := cleanSearchTermsLine(text)
-			max := sectionRule.Parsed.Constraints.MaxChars.Value
-			if max > 0 && runeLen(line) > max {
-				line = trimToMaxByWords(line, max)
-			}
-			text = line
+			text = cleanSearchTermsLine(text)
 		}
 		issues := validateSectionText(step, opts.Lang, opts.Req, text, sectionRule)
 		if len(issues) > 0 {
@@ -304,12 +299,6 @@ func generateBulletsLineByLine(opts sectionGenerateOptions, doc ListingDocument,
 				issues = append(issues, fmt.Sprintf("第%d条应为单行输出", idx))
 			}
 			line := cleanBulletLine(raw)
-			if maxLen > 0 && runeLen(line) > maxLen {
-				line = trimToMaxByWords(line, maxLen)
-			}
-			if minLen > 0 && runeLen(line) < minLen {
-				line = padToMinByKeywords(line, minLen, maxLen, opts.Req.Keywords)
-			}
 			if strings.TrimSpace(line) == "" {
 				issues = append(issues, fmt.Sprintf("第%d条为空", idx))
 			}
