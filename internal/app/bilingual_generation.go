@@ -23,10 +23,9 @@ type bilingualGenerateOptions struct {
 	Generation      config.GenerationConfig
 	Translation     config.TranslationConfig
 	APIKey          string
-	TranslateAPIKey string
 	TranslateSID    string
 	TranslateSK     string
-	RulesText       string
+	Rules           config.SectionRules
 	MaxRetries      int
 	Client          *llm.Client
 	TranslateClient *translator.Client
@@ -74,7 +73,6 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 				SourceText:  sourceText,
 				Generation:  opts.Generation,
 				Translation: opts.Translation,
-				APIKey:      opts.TranslateAPIKey,
 				SecretID:    opts.TranslateSID,
 				SecretKey:   opts.TranslateSK,
 				MaxRetries:  opts.MaxRetries,
@@ -99,7 +97,6 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 				Section:     section,
 				SourceTexts: sourceTexts,
 				Translation: opts.Translation,
-				APIKey:      opts.TranslateAPIKey,
 				SecretID:    opts.TranslateSID,
 				SecretKey:   opts.TranslateSK,
 				MaxRetries:  opts.MaxRetries,
@@ -142,7 +139,7 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		ProviderCfg: opts.ProviderCfg,
 		Generation:  opts.Generation,
 		APIKey:      opts.APIKey,
-		RulesText:   opts.RulesText,
+		Rules:       opts.Rules,
 		MaxRetries:  opts.MaxRetries,
 		Client:      opts.Client,
 		Logger:      opts.Logger,
@@ -264,7 +261,6 @@ type translateSectionOptions struct {
 	SourceText  string
 	Generation  config.GenerationConfig
 	Translation config.TranslationConfig
-	APIKey      string
 	SecretID    string
 	SecretKey   string
 	MaxRetries  int
@@ -278,7 +274,6 @@ type translateBatchOptions struct {
 	Section     string
 	SourceTexts []string
 	Translation config.TranslationConfig
-	APIKey      string
 	SecretID    string
 	SecretKey   string
 	MaxRetries  int
@@ -311,35 +306,18 @@ func translateSectionWithRetry(opts translateSectionOptions) (string, int64, err
 			})
 		},
 	}, func(attempt int) error {
-		systemPrompt := buildTranslateSystemPrompt(opts.Section)
-		userPrompt := buildTranslateUserPrompt(opts.Section, opts.SourceText)
-		if lastIssues != "" {
-			userPrompt += "\n\n【上次翻译问题，必须修复】\n" + lastIssues
-		}
-		systemForReq := systemPrompt
-		userForReq := userPrompt
-		if isBatchTranslationProvider(opts.Translation.Provider) {
-			// 腾讯翻译接口是机器翻译参数，不接受 system/user 对话提示。
-			systemForReq = ""
-			userForReq = opts.SourceText
-		}
 		opts.Logger.Emit(logging.Event{Event: "api_request_translate_" + opts.Section, Input: opts.Req.SourcePath, Candidate: opts.Candidate, Lang: "cn", Attempt: attempt})
 		resp, err := opts.Client.Translate(context.Background(), translator.Request{
-			Provider:     opts.Translation.Provider,
-			Endpoint:     opts.Translation.BaseURL,
-			Model:        opts.Translation.Model,
-			APIKey:       opts.APIKey,
-			SecretID:     opts.SecretID,
-			SecretKey:    opts.SecretKey,
-			Region:       opts.Translation.Region,
-			Source:       opts.Translation.Source,
-			Target:       opts.Translation.Target,
-			ProjectID:    opts.Translation.ProjectID,
-			ThinkingType: opts.Translation.ThinkingType,
-			Temperature:  opts.Translation.Temperature,
-			MaxTokens:    opts.Translation.MaxTokens,
-			SystemPrompt: systemForReq,
-			UserPrompt:   userForReq,
+			Provider:   opts.Translation.Provider,
+			Endpoint:   opts.Translation.BaseURL,
+			Model:      opts.Translation.Model,
+			SecretID:   opts.SecretID,
+			SecretKey:  opts.SecretKey,
+			Region:     opts.Translation.Region,
+			Source:     opts.Translation.Source,
+			Target:     opts.Translation.Target,
+			ProjectID:  opts.Translation.ProjectID,
+			UserPrompt: opts.SourceText,
 		})
 		if err != nil {
 			lastIssues = "- 翻译请求失败: " + err.Error()
@@ -400,7 +378,6 @@ func translateSectionsBatchWithRetry(opts translateBatchOptions) ([]string, int6
 			Provider:  opts.Translation.Provider,
 			Endpoint:  opts.Translation.BaseURL,
 			Model:     opts.Translation.Model,
-			APIKey:    opts.APIKey,
 			SecretID:  opts.SecretID,
 			SecretKey: opts.SecretKey,
 			Region:    opts.Translation.Region,
@@ -443,21 +420,6 @@ func translateSectionsBatchWithRetry(opts translateBatchOptions) ([]string, int6
 		return nil, 0, fmt.Errorf("%s 批量翻译重试后仍失败：%s", opts.Section, lastIssues)
 	}
 	return outTexts, outLatency, nil
-}
-
-func buildTranslateSystemPrompt(section string) string {
-	base := "你是专业翻译。将英文亚马逊文案翻译成自然中文。只输出翻译结果，不要解释，不要前后缀。保留品牌名、数字、尺寸、单位。"
-	if section == "search_terms" {
-		base += " 搜索词必须单行输出，词与词之间用空格分隔，不加逗号。"
-	}
-	return base
-}
-
-func buildTranslateUserPrompt(section, source string) string {
-	if section == "search_terms" {
-		return "请翻译以下英文搜索词为中文，保持关键词顺序，单行输出：\n" + source
-	}
-	return "请翻译以下英文文案为中文：\n" + source
 }
 
 func isBatchTranslationProvider(provider string) bool {

@@ -18,21 +18,16 @@ import (
 )
 
 type Request struct {
-	Provider     string
-	Endpoint     string
-	Model        string
-	APIKey       string
-	SecretID     string
-	SecretKey    string
-	Region       string
-	Source       string
-	Target       string
-	ProjectID    int64
-	ThinkingType string
-	Temperature  float64
-	MaxTokens    int
-	SystemPrompt string
-	UserPrompt   string
+	Provider   string
+	Endpoint   string
+	Model      string
+	SecretID   string
+	SecretKey  string
+	Region     string
+	Source     string
+	Target     string
+	ProjectID  int64
+	UserPrompt string
 }
 
 type Response struct {
@@ -59,8 +54,6 @@ func NewClient(timeout time.Duration) *Client {
 func (c *Client) Translate(ctx context.Context, req Request) (Response, error) {
 	provider := normalizeProvider(req.Provider)
 	switch provider {
-	case "zhipu":
-		return c.translateZhipu(ctx, req)
 	case "tencent_tmt":
 		return c.translateTencent(ctx, req)
 	default:
@@ -81,19 +74,6 @@ func (c *Client) TranslateBatch(ctx context.Context, req Request, sourceTexts []
 
 	provider := normalizeProvider(req.Provider)
 	switch provider {
-	case "zhipu":
-		start := time.Now()
-		out := make([]string, 0, len(texts))
-		for _, t := range texts {
-			itemReq := req
-			itemReq.UserPrompt = t
-			resp, err := c.translateZhipuByText(ctx, itemReq, t)
-			if err != nil {
-				return BatchResponse{}, err
-			}
-			out = append(out, resp.Text)
-		}
-		return BatchResponse{Texts: out, LatencyMS: time.Since(start).Milliseconds()}, nil
 	case "tencent_tmt":
 		return c.translateTencentBatch(ctx, req, texts)
 	default:
@@ -104,89 +84,13 @@ func (c *Client) TranslateBatch(ctx context.Context, req Request, sourceTexts []
 func normalizeProvider(provider string) string {
 	p := strings.ToLower(strings.TrimSpace(provider))
 	switch p {
-	case "", "zhipu":
-		return "zhipu"
+	case "":
+		return "tencent_tmt"
 	case "tencent", "tencent_tmt":
 		return "tencent_tmt"
 	default:
 		return p
 	}
-}
-
-func (c *Client) translateZhipu(ctx context.Context, req Request) (Response, error) {
-	return c.translateZhipuByText(ctx, req, req.UserPrompt)
-}
-
-func (c *Client) translateZhipuByText(ctx context.Context, req Request, sourceText string) (Response, error) {
-	endpoint := strings.TrimSpace(req.Endpoint)
-	if endpoint == "" {
-		endpoint = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-	}
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = "glm-4.7-flash"
-	}
-	thinking := strings.TrimSpace(req.ThinkingType)
-	if thinking == "" {
-		thinking = "disabled"
-	}
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 1024
-	}
-	temp := req.Temperature
-	if temp == 0 {
-		temp = 0.2
-	}
-
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": req.SystemPrompt},
-			{"role": "user", "content": buildZhipuUserPrompt(req.UserPrompt, sourceText)},
-		},
-		"thinking":    map[string]string{"type": thinking},
-		"max_tokens":  maxTokens,
-		"temperature": temp,
-	}
-
-	start := time.Now()
-	var resp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := c.doJSON(ctx, endpoint, req.APIKey, payload, &resp); err != nil {
-		return Response{}, err
-	}
-	if resp.Error != nil {
-		return Response{}, fmt.Errorf("翻译 API 错误：%s", resp.Error.Message)
-	}
-	if len(resp.Choices) == 0 {
-		return Response{}, fmt.Errorf("翻译 API 返回为空")
-	}
-	text := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if text == "" {
-		return Response{}, fmt.Errorf("翻译内容为空")
-	}
-	return Response{Text: text, LatencyMS: time.Since(start).Milliseconds()}, nil
-}
-
-func buildZhipuUserPrompt(userPrompt, sourceText string) string {
-	if strings.TrimSpace(userPrompt) != "" && strings.TrimSpace(sourceText) != "" {
-		if strings.Contains(userPrompt, sourceText) {
-			return userPrompt
-		}
-	}
-	if strings.TrimSpace(userPrompt) != "" {
-		return userPrompt
-	}
-	return sourceText
 }
 
 func (c *Client) translateTencent(ctx context.Context, req Request) (Response, error) {
@@ -401,37 +305,6 @@ func hmacSHA256(key []byte, msg string) []byte {
 func hashSHA256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-func (c *Client) doJSON(ctx context.Context, endpoint, apiKey string, in any, out any) error {
-	buf := &bytes.Buffer{}
-	if err := json.NewEncoder(buf).Encode(in); err != nil {
-		return fmt.Errorf("编码翻译请求失败：%w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, buf)
-	if err != nil {
-		return fmt.Errorf("创建翻译请求失败：%w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("翻译请求失败：%w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("读取翻译响应失败：%w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("翻译 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("解析翻译响应失败：%w", err)
-	}
-	return nil
 }
 
 func truncate(s string, n int) string {

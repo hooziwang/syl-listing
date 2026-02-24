@@ -15,6 +15,7 @@ import (
 	"syl-listing/internal/llm"
 	"syl-listing/internal/logging"
 	"syl-listing/internal/output"
+	"syl-listing/internal/translator"
 )
 
 type Options struct {
@@ -76,6 +77,19 @@ func Run(opts Options) (Result, error) {
 	apiKey := strings.TrimSpace(envMap[cfg.APIKeyEnv])
 	if apiKey == "" {
 		return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.APIKeyEnv, paths.EnvExample, paths.EnvPath)
+	}
+	translateSecretID := strings.TrimSpace(envMap[cfg.Translation.SecretIDEnv])
+	translateSecretKey := strings.TrimSpace(envMap[cfg.Translation.SecretKeyEnv])
+	switch strings.ToLower(strings.TrimSpace(cfg.Translation.Provider)) {
+	case "tencent_tmt", "tencent":
+		if translateSecretID == "" {
+			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.SecretIDEnv, paths.EnvExample, paths.EnvPath)
+		}
+		if translateSecretKey == "" {
+			return Result{}, fmt.Errorf("%s 为空。先复制 %s 为 %s 并填写 key", cfg.Translation.SecretKeyEnv, paths.EnvExample, paths.EnvPath)
+		}
+	default:
+		return Result{}, fmt.Errorf("翻译 provider 仅支持 tencent_tmt，当前：%s", cfg.Translation.Provider)
 	}
 
 	logger, closer, err := logging.New(opts.Stdout, opts.LogFile)
@@ -146,6 +160,7 @@ func Run(opts Options) (Result, error) {
 
 	results := make(chan bool, len(validReqs)*cfg.Output.Num)
 	client := llm.NewClient(time.Duration(cfg.RequestTimeoutSec) * time.Second)
+	translateClient := translator.NewClient(time.Duration(cfg.RequestTimeoutSec) * time.Second)
 
 	var wg sync.WaitGroup
 
@@ -157,16 +172,20 @@ func Run(opts Options) (Result, error) {
 				go func(j candidateJob) {
 					defer wg.Done()
 					ok := processCandidate(processCandidateOptions{
-						Job:         j,
-						OutDir:      outDir,
-						Provider:    cfg.Provider,
-						ProviderCfg: providerCfg,
-						Generation:  cfg.Generation,
-						APIKey:      apiKey,
-						Rules:       rules,
-						MaxRetries:  cfg.MaxRetries,
-						Client:      client,
-						Logger:      logger,
+						Job:             j,
+						OutDir:          outDir,
+						Provider:        cfg.Provider,
+						ProviderCfg:     providerCfg,
+						Generation:      cfg.Generation,
+						Translation:     cfg.Translation,
+						APIKey:          apiKey,
+						TranslateSID:    translateSecretID,
+						TranslateSK:     translateSecretKey,
+						Rules:           rules,
+						MaxRetries:      cfg.MaxRetries,
+						Client:          client,
+						TranslateClient: translateClient,
+						Logger:          logger,
 					})
 					results <- ok
 				}(job)
@@ -188,51 +207,65 @@ func Run(opts Options) (Result, error) {
 }
 
 type processCandidateOptions struct {
-	Job         candidateJob
-	OutDir      string
-	Provider    string
-	ProviderCfg config.ProviderConfig
-	Generation  config.GenerationConfig
-	APIKey      string
-	Rules       config.SectionRules
-	MaxRetries  int
-	Client      *llm.Client
-	Logger      *logging.Logger
+	Job             candidateJob
+	OutDir          string
+	Provider        string
+	ProviderCfg     config.ProviderConfig
+	Generation      config.GenerationConfig
+	Translation     config.TranslationConfig
+	APIKey          string
+	TranslateSID    string
+	TranslateSK     string
+	Rules           config.SectionRules
+	MaxRetries      int
+	Client          *llm.Client
+	TranslateClient *translator.Client
+	Logger          *logging.Logger
 }
 
 func processCandidate(opts processCandidateOptions) bool {
-	id, enPath, err := output.NextEN(opts.OutDir, 8, nil)
+	id, enPath, cnPath, err := output.NextPair(opts.OutDir, 8, nil)
 	if err != nil {
 		opts.Logger.Emit(logging.Event{Level: "error", Event: "name_failed", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Error: err.Error()})
 		return false
 	}
 	_ = id
 
-	enDoc, enLatency, err := generateDocumentBySections(sectionGenerateOptions{
-		Req:         opts.Job.Req,
-		Lang:        "en",
-		Provider:    opts.Provider,
-		ProviderCfg: opts.ProviderCfg,
-		Generation:  opts.Generation,
-		APIKey:      opts.APIKey,
-		Rules:       opts.Rules,
-		MaxRetries:  opts.MaxRetries,
-		Client:      opts.Client,
-		Logger:      opts.Logger,
-		Candidate:   opts.Job.Candidate,
+	enDoc, cnDoc, enLatency, cnLatency, err := generateENAndTranslateCNBySections(bilingualGenerateOptions{
+		Req:             opts.Job.Req,
+		Provider:        opts.Provider,
+		ProviderCfg:     opts.ProviderCfg,
+		Generation:      opts.Generation,
+		Translation:     opts.Translation,
+		APIKey:          opts.APIKey,
+		TranslateSID:    opts.TranslateSID,
+		TranslateSK:     opts.TranslateSK,
+		Rules:           opts.Rules,
+		MaxRetries:      opts.MaxRetries,
+		Client:          opts.Client,
+		TranslateClient: opts.TranslateClient,
+		Logger:          opts.Logger,
+		Candidate:       opts.Job.Candidate,
 	})
 	if err != nil {
 		opts.Logger.Emit(logging.Event{Level: "error", Event: "generate_failed", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Error: err.Error()})
 		return false
 	}
 	opts.Logger.Emit(logging.Event{Event: "generate_ok", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Lang: "en", LatencyMS: enLatency})
+	opts.Logger.Emit(logging.Event{Event: "generate_ok", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Lang: "cn", LatencyMS: cnLatency})
 
 	enMD := RenderMarkdown("en", opts.Job.Req, enDoc)
 	if err := os.WriteFile(enPath, []byte(enMD), 0o644); err != nil {
 		opts.Logger.Emit(logging.Event{Level: "error", Event: "write_failed", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Lang: "en", OutputFile: enPath, Error: err.Error()})
 		return false
 	}
+	cnMD := RenderMarkdown("cn", opts.Job.Req, cnDoc)
+	if err := os.WriteFile(cnPath, []byte(cnMD), 0o644); err != nil {
+		opts.Logger.Emit(logging.Event{Level: "error", Event: "write_failed", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Lang: "cn", OutputFile: cnPath, Error: err.Error()})
+		return false
+	}
 	opts.Logger.Emit(logging.Event{Event: "write_ok", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Lang: "en", OutputFile: enPath})
+	opts.Logger.Emit(logging.Event{Event: "write_ok", Input: opts.Job.Req.SourcePath, Candidate: opts.Job.Candidate, Lang: "cn", OutputFile: cnPath})
 	return true
 }
 

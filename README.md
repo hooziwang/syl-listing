@@ -1,6 +1,6 @@
 # syl-listing
 
-`syl-listing` 是一个基于 Go + Cobra 的 CLI，用于把 Listing 需求 Markdown 批量生成为英文 Listing Markdown 文件。
+`syl-listing` 是一个基于 Go + Cobra 的 CLI，用于把 Listing 需求 Markdown 批量生成中英 Listing Markdown 文件。
 
 ## 命令
 
@@ -15,7 +15,7 @@ syl-listing version
 首次运行会自动创建：
 
 - `~/.syl-listing/config.yaml`
-- `~/.syl-listing/rules/`（分段规则文件目录）
+- `~/.syl-listing/rules/`（分段规则目录）
 - `~/.syl-listing/.env.example`
 
 并要求手动创建：
@@ -26,12 +26,18 @@ syl-listing version
 
 规则目录默认：`~/.syl-listing/rules`
 
-- `title.md`：标题规则
-- `bullets.md`：五点规则
-- `description.md`：描述规则
-- `search_terms.md`：搜索词规则
+- `title.md`
+- `bullets.md`
+- `description.md`
+- `search_terms.md`
 
-模型在每一步仅加载对应规则文件。
+每一步只加载对应规则文件。模型侧只负责英文生成。
+
+## 生成流程
+
+1. EN 模型分段生成：`title -> bullets -> description -> search_terms`
+2. CN 按 EN 分段翻译得到（标题/关键词/分类/五点/描述/搜索词）
+3. 两个版本分别渲染输出
 
 ## 输入识别
 
@@ -43,27 +49,14 @@ syl-listing version
 ===Listing Requirements===
 ```
 
-## 生成流程（仅英文）
-
-按 4 个步骤生成并校验：
-
-1. `title`
-2. `bullets`
-3. `description`
-4. `search_terms`
-
-`关键词` 与 `分类` 直接复制输入，不由模型生成。
-
 ## 输出
 
-每个候选生成 1 个文件：
+每个候选生成 2 个文件：
 
 - `listing_xxxxxxxx_en.md`
+- `listing_xxxxxxxx_cn.md`
 
-规则：
-
-- `xxxxxxxx` 为 8 位随机串（数字 + 大小写字母）。
-- 冲突时自动重试生成新随机串。
+`xxxxxxxx` 为 8 位随机串（数字 + 大小写字母），冲突自动重试。
 
 ## 配置文件示例
 
@@ -84,6 +77,8 @@ providers:
     model: gpt-5.3-codex
     model_reasoning_effort: high
 ```
+
+翻译配置可在 `translation` 节点覆盖；当前仅支持 `tencent_tmt`。
 
 ## 参数
 

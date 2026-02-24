@@ -35,7 +35,7 @@ func NewRootCmd(stdout, stderr *os.File) *cobra.Command {
 
 	root := &cobra.Command{
 		Use:           "syl-listing [file_or_dir ...]",
-		Short:         "根据 listing 需求文件批量生成英文 Markdown",
+		Short:         "根据 listing 需求文件批量生成中英 Markdown",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE:          runGen(stdout, stderr, flags, false, &showVersion),

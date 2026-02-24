@@ -128,22 +128,22 @@ func (c *Config) applyDefaults() {
 		c.Generation.TitleMustContainTopNKW = 3
 	}
 	if strings.TrimSpace(c.Translation.Provider) == "" {
-		c.Translation.Provider = "zhipu"
+		c.Translation.Provider = "tencent_tmt"
 	}
 	provider := strings.ToLower(strings.TrimSpace(c.Translation.Provider))
 	baseURL := strings.TrimSpace(c.Translation.BaseURL)
 	if provider == "tencent" || provider == "tencent_tmt" {
-		if baseURL == "" || baseURL == "https://open.bigmodel.cn/api/paas/v4/chat/completions" {
+		if baseURL == "" {
 			c.Translation.BaseURL = "https://tmt.tencentcloudapi.com"
 		}
-	} else if baseURL == "" {
-		c.Translation.BaseURL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+	} else {
+		c.Translation.Provider = "tencent_tmt"
+		if baseURL == "" {
+			c.Translation.BaseURL = "https://tmt.tencentcloudapi.com"
+		}
 	}
 	if strings.TrimSpace(c.Translation.Model) == "" {
-		c.Translation.Model = "glm-4.7-flash"
-	}
-	if strings.TrimSpace(c.Translation.APIKeyEnv) == "" {
-		c.Translation.APIKeyEnv = "ZHIPU_TRANSLATE_API_KEY"
+		c.Translation.Model = "tmt"
 	}
 	if strings.TrimSpace(c.Translation.SecretIDEnv) == "" {
 		c.Translation.SecretIDEnv = "TENCENTCLOUD_SECRET_ID"
