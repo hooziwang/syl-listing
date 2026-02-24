@@ -14,3 +14,7 @@ providers:
     api_mode: chat
     model: deepseek-chat
     model_reasoning_effort: ""
+    thinking_fallback:
+      enabled: true
+      attempt: 3
+      model: deepseek-reasoner

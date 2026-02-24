@@ -101,6 +101,7 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 		outLatency int64
 	)
 	lastIssues := ""
+	history := make([]llm.Message, 0, 6)
 	err := withExponentialBackoff(retryOptions{
 		MaxRetries: opts.MaxRetries,
 		BaseDelay:  500 * time.Millisecond,
@@ -125,10 +126,13 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 			return errors.New(lastIssues)
 		}
 		systemPrompt := buildSectionSystemPrompt(sectionRule)
-		userPrompt := buildSectionUserPrompt(step, opts.Req, doc)
-		if lastIssues != "" {
-			userPrompt += "\n\n【上次输出问题，必须全部修复】\n" + lastIssues
-		}
+		baseUserPrompt := buildSectionUserPrompt(step, opts.Req, doc)
+		messages := make([]llm.Message, 0, 2+len(history))
+		messages = append(messages,
+			llm.Message{Role: "system", Content: systemPrompt},
+			llm.Message{Role: "user", Content: baseUserPrompt},
+		)
+		messages = append(messages, history...)
 
 		reqEvent := logging.Event{
 			Event:     "api_request_" + step,
@@ -136,25 +140,38 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
 			Provider:  opts.Provider,
-			Model:     opts.ProviderCfg.Model,
 			APIMode:   opts.ProviderCfg.APIMode,
 			BaseURL:   opts.ProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
+		reqModel, thinkingFallback := resolveModelForAttempt(opts, attempt)
+		reqEvent.Model = reqModel
+		if thinkingFallback {
+			opts.Logger.Emit(logging.Event{
+				Event:     "thinking_fallback_" + step,
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Provider:  opts.Provider,
+				Model:     reqModel,
+				Attempt:   attempt,
+			})
+		}
 		if opts.Logger.Verbose() {
 			reqEvent.SystemPrompt = systemPrompt
-			reqEvent.UserPrompt = userPrompt
+			reqEvent.UserPrompt = baseUserPrompt
 		}
 		opts.Logger.Emit(reqEvent)
 		resp, err := opts.Client.Generate(context.Background(), llm.Request{
 			Provider:        opts.Provider,
 			BaseURL:         opts.ProviderCfg.BaseURL,
-			Model:           opts.ProviderCfg.Model,
+			Model:           reqModel,
 			APIMode:         opts.ProviderCfg.APIMode,
 			APIKey:          opts.APIKey,
 			ReasoningEffort: opts.ProviderCfg.ModelReasoningEffort,
 			SystemPrompt:    systemPrompt,
-			UserPrompt:      userPrompt,
+			UserPrompt:      baseUserPrompt,
+			Messages:        messages,
 		})
 		if err != nil {
 			lastIssues = "- API 调用失败: " + err.Error()
@@ -169,7 +186,7 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
 			Provider:  opts.Provider,
-			Model:     opts.ProviderCfg.Model,
+			Model:     reqModel,
 			LatencyMS: resp.LatencyMS,
 			Attempt:   attempt,
 		}
@@ -194,6 +211,10 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 		}
 		if len(issues) > 0 {
 			lastIssues = "- " + strings.Join(issues, "\n- ")
+			history = append(history,
+				llm.Message{Role: "assistant", Content: text},
+				llm.Message{Role: "user", Content: buildSectionRepairPrompt(step, issues)},
+			)
 			opts.Logger.Emit(logging.Event{Level: "warn", Event: "validate_error_" + step, Input: opts.Req.SourcePath, Candidate: opts.Candidate, Lang: opts.Lang, Attempt: attempt, Error: strings.Join(issues, "; ")})
 			return errors.New(strings.Join(issues, "; "))
 		}
@@ -303,6 +324,15 @@ func generateBulletsBatchJSONWithRetry(opts sectionGenerateOptions, doc ListingD
 		outLatency int64
 	)
 	lastIssues := ""
+	systemPrompt := buildSectionSystemPrompt(rule) + `
+
+【JSON协议】
+Return valid json only.
+必须只返回一个 json object，禁止 markdown 代码块、禁止解释。
+对象结构固定为：{"bullets":["line1","line2","line3","line4","line5"]}`
+	baseUserPrompt := buildSectionUserPrompt("bullets", opts.Req, doc) +
+		fmt.Sprintf("\n【输出要求】必须返回 json object，键名是 bullets，且 bullets 必须恰好 %d 条。", expected)
+	history := make([]llm.Message, 0, 8)
 	err := withExponentialBackoff(retryOptions{
 		MaxRetries: opts.MaxRetries,
 		BaseDelay:  500 * time.Millisecond,
@@ -321,17 +351,12 @@ func generateBulletsBatchJSONWithRetry(opts sectionGenerateOptions, doc ListingD
 			})
 		},
 	}, func(attempt int) error {
-		systemPrompt := buildSectionSystemPrompt(rule) + `
-
-【JSON协议】
-Return valid json only.
-必须只返回一个 json object，禁止 markdown 代码块、禁止解释。
-对象结构固定为：{"bullets":["line1","line2","line3","line4","line5"]}`
-		userPrompt := buildSectionUserPrompt("bullets", opts.Req, doc)
-		userPrompt += fmt.Sprintf("\n【输出要求】必须返回 json object，键名是 bullets，且 bullets 必须恰好 %d 条。", expected)
-		if lastIssues != "" {
-			userPrompt += "\n\n【上次输出问题，必须全部修复】\n" + lastIssues
-		}
+		messages := make([]llm.Message, 0, 2+len(history))
+		messages = append(messages,
+			llm.Message{Role: "system", Content: systemPrompt},
+			llm.Message{Role: "user", Content: baseUserPrompt},
+		)
+		messages = append(messages, history...)
 
 		reqEvent := logging.Event{
 			Event:     "api_request_bullets",
@@ -339,25 +364,38 @@ Return valid json only.
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
 			Provider:  opts.Provider,
-			Model:     opts.ProviderCfg.Model,
 			APIMode:   opts.ProviderCfg.APIMode,
 			BaseURL:   opts.ProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
+		reqModel, thinkingFallback := resolveModelForAttempt(opts, attempt)
+		reqEvent.Model = reqModel
+		if thinkingFallback {
+			opts.Logger.Emit(logging.Event{
+				Event:     "thinking_fallback_bullets",
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Provider:  opts.Provider,
+				Model:     reqModel,
+				Attempt:   attempt,
+			})
+		}
 		if opts.Logger.Verbose() {
 			reqEvent.SystemPrompt = systemPrompt
-			reqEvent.UserPrompt = userPrompt
+			reqEvent.UserPrompt = baseUserPrompt
 		}
 		opts.Logger.Emit(reqEvent)
 		resp, err := opts.Client.Generate(context.Background(), llm.Request{
 			Provider:        opts.Provider,
 			BaseURL:         opts.ProviderCfg.BaseURL,
-			Model:           opts.ProviderCfg.Model,
+			Model:           reqModel,
 			APIMode:         opts.ProviderCfg.APIMode,
 			APIKey:          opts.APIKey,
 			ReasoningEffort: opts.ProviderCfg.ModelReasoningEffort,
 			SystemPrompt:    systemPrompt,
-			UserPrompt:      userPrompt,
+			UserPrompt:      baseUserPrompt,
+			Messages:        messages,
 			JSONMode:        true,
 		})
 		if err != nil {
@@ -380,7 +418,7 @@ Return valid json only.
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
 			Provider:  opts.Provider,
-			Model:     opts.ProviderCfg.Model,
+			Model:     reqModel,
 			LatencyMS: resp.LatencyMS,
 			Attempt:   attempt,
 		}
@@ -392,6 +430,10 @@ Return valid json only.
 		items, parseErr := parseBulletsFromJSON(text, expected)
 		if parseErr != nil {
 			lastIssues = "- JSON 解析失败: " + parseErr.Error()
+			history = append(history,
+				llm.Message{Role: "assistant", Content: text},
+				llm.Message{Role: "user", Content: buildJSONRepairPrompt(parseErr.Error(), `{"bullets":["..."]}`)},
+			)
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
 				Event:     "validate_error_bullets",
@@ -422,6 +464,16 @@ func regenerateBulletItemJSONWithRetry(opts sectionGenerateOptions, doc ListingD
 		outLatency int64
 	)
 	lastIssues := ""
+	systemPrompt := buildSectionSystemPrompt(rule) + `
+
+【JSON协议】
+Return valid json only.
+必须只返回一个 json object：{"bullet":"..."}`
+	tmpDoc := doc
+	tmpDoc.BulletPoints = append([]string{}, current...)
+	baseUserPrompt := buildSectionUserPrompt("bullets", opts.Req, tmpDoc) +
+		fmt.Sprintf("\n【子任务】只修复第%d条，返回 json object：{\"bullet\":\"...\"}。", idx)
+	history := make([]llm.Message, 0, 8)
 	err := withExponentialBackoff(retryOptions{
 		MaxRetries: opts.MaxRetries,
 		BaseDelay:  500 * time.Millisecond,
@@ -440,18 +492,12 @@ func regenerateBulletItemJSONWithRetry(opts sectionGenerateOptions, doc ListingD
 			})
 		},
 	}, func(attempt int) error {
-		systemPrompt := buildSectionSystemPrompt(rule) + `
-
-【JSON协议】
-Return valid json only.
-必须只返回一个 json object：{"bullet":"..."}`
-		tmpDoc := doc
-		tmpDoc.BulletPoints = append([]string{}, current...)
-		userPrompt := buildSectionUserPrompt("bullets", opts.Req, tmpDoc)
-		userPrompt += fmt.Sprintf("\n【子任务】只修复第%d条，返回 json object：{\"bullet\":\"...\"}。", idx)
-		if lastIssues != "" {
-			userPrompt += "\n\n【上次输出问题，必须全部修复】\n" + lastIssues
-		}
+		messages := make([]llm.Message, 0, 2+len(history))
+		messages = append(messages,
+			llm.Message{Role: "system", Content: systemPrompt},
+			llm.Message{Role: "user", Content: baseUserPrompt},
+		)
+		messages = append(messages, history...)
 
 		reqEvent := logging.Event{
 			Event:     fmt.Sprintf("api_request_bullets_item_%d", idx),
@@ -459,25 +505,38 @@ Return valid json only.
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
 			Provider:  opts.Provider,
-			Model:     opts.ProviderCfg.Model,
 			APIMode:   opts.ProviderCfg.APIMode,
 			BaseURL:   opts.ProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
+		reqModel, thinkingFallback := resolveModelForAttempt(opts, attempt)
+		reqEvent.Model = reqModel
+		if thinkingFallback {
+			opts.Logger.Emit(logging.Event{
+				Event:     fmt.Sprintf("thinking_fallback_bullets_item_%d", idx),
+				Input:     opts.Req.SourcePath,
+				Candidate: opts.Candidate,
+				Lang:      opts.Lang,
+				Provider:  opts.Provider,
+				Model:     reqModel,
+				Attempt:   attempt,
+			})
+		}
 		if opts.Logger.Verbose() {
 			reqEvent.SystemPrompt = systemPrompt
-			reqEvent.UserPrompt = userPrompt
+			reqEvent.UserPrompt = baseUserPrompt
 		}
 		opts.Logger.Emit(reqEvent)
 		resp, err := opts.Client.Generate(context.Background(), llm.Request{
 			Provider:        opts.Provider,
 			BaseURL:         opts.ProviderCfg.BaseURL,
-			Model:           opts.ProviderCfg.Model,
+			Model:           reqModel,
 			APIMode:         opts.ProviderCfg.APIMode,
 			APIKey:          opts.APIKey,
 			ReasoningEffort: opts.ProviderCfg.ModelReasoningEffort,
 			SystemPrompt:    systemPrompt,
-			UserPrompt:      userPrompt,
+			UserPrompt:      baseUserPrompt,
+			Messages:        messages,
 			JSONMode:        true,
 		})
 		if err != nil {
@@ -501,7 +560,7 @@ Return valid json only.
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
 			Provider:  opts.Provider,
-			Model:     opts.ProviderCfg.Model,
+			Model:     reqModel,
 			LatencyMS: resp.LatencyMS,
 			Attempt:   attempt,
 		}
@@ -513,6 +572,10 @@ Return valid json only.
 		line, parseErr := parseBulletItemFromJSON(text)
 		if parseErr != nil {
 			lastIssues = "- JSON 解析失败: " + parseErr.Error()
+			history = append(history,
+				llm.Message{Role: "assistant", Content: text},
+				llm.Message{Role: "user", Content: buildJSONRepairPrompt(parseErr.Error(), `{"bullet":"..."}`)},
+			)
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
 				Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
@@ -539,6 +602,10 @@ Return valid json only.
 		}
 		if len(issues) > 0 {
 			lastIssues = "- " + strings.Join(issues, "\n- ")
+			history = append(history,
+				llm.Message{Role: "assistant", Content: text},
+				llm.Message{Role: "user", Content: buildJSONRepairPrompt(strings.Join(issues, "; "), `{"bullet":"..."}`)},
+			)
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
 				Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
@@ -739,6 +806,61 @@ func buildSectionUserPrompt(step string, req listing.Requirement, doc ListingDoc
 	b.WriteString("\n")
 	b.WriteString("【执行提醒】严格按 system 中 YAML 的 output 与 constraints 生成；hard=true 约束必须全部满足。\n")
 	return b.String()
+}
+
+func buildSectionRepairPrompt(step string, issues []string) string {
+	label := step
+	switch step {
+	case "title":
+		label = "title"
+	case "bullets":
+		label = "bullet points"
+	case "description":
+		label = "product description"
+	case "search_terms":
+		label = "search terms"
+	}
+	return fmt.Sprintf(
+		"上一版%s存在以下问题，必须逐条修复：\n- %s\n请基于上一版内容直接修复，并且只输出修复后的最终文本，不要解释。",
+		label,
+		strings.Join(issues, "\n- "),
+	)
+}
+
+func buildJSONRepairPrompt(issueText, schema string) string {
+	return fmt.Sprintf(
+		"上一版输出不符合要求：%s\n请基于上一版内容直接修复。必须只返回一个合法 JSON object，格式示例：%s。禁止输出 JSON 以外的任何内容。",
+		strings.TrimSpace(issueText),
+		schema,
+	)
+}
+
+func resolveModelForAttempt(opts sectionGenerateOptions, attempt int) (string, bool) {
+	model := strings.TrimSpace(opts.ProviderCfg.Model)
+	if model == "" {
+		model = "deepseek-chat"
+	}
+	if !strings.EqualFold(opts.Provider, "deepseek") {
+		return model, false
+	}
+	fb := opts.ProviderCfg.ThinkingFallback
+	if !fb.Enabled {
+		return model, false
+	}
+	if fb.Attempt <= 0 {
+		fb.Attempt = 3
+	}
+	if attempt < fb.Attempt {
+		return model, false
+	}
+	fallbackModel := strings.TrimSpace(fb.Model)
+	if fallbackModel == "" {
+		fallbackModel = "deepseek-reasoner"
+	}
+	if strings.EqualFold(model, fallbackModel) {
+		return model, false
+	}
+	return fallbackModel, true
 }
 
 func validateSectionText(step, lang string, req listing.Requirement, text string, rule config.SectionRuleFile, tolerance int) ([]string, []string) {

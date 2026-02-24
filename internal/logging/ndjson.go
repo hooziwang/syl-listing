@@ -159,6 +159,10 @@ func (l *Logger) formatHuman(ev Event) string {
 		step := strings.TrimPrefix(ev.Event, "validate_error_")
 		return fmt.Sprintf("[%s] %s 校验失败：%s", l.jobTag(ev), humanStepLabel(step), fallback(ev.Error, "-"))
 	}
+	if strings.HasPrefix(ev.Event, "thinking_fallback_") {
+		step := strings.TrimPrefix(ev.Event, "thinking_fallback_")
+		return fmt.Sprintf("[%s] %s 启用思考兜底（model=%s，第%d次）", l.jobTag(ev), humanStepLabel(step), fallback(ev.Model, "-"), ev.Attempt)
+	}
 	return ""
 }
 

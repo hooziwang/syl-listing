@@ -21,8 +21,14 @@ type Request struct {
 	ReasoningEffort string
 	SystemPrompt    string
 	UserPrompt      string
+	Messages        []Message
 	JSONMode        bool
 	Timeout         time.Duration
+}
+
+type Message struct {
+	Role    string
+	Content string
 }
 
 type Response struct {
@@ -92,18 +98,17 @@ func (c *Client) generateOpenAI(ctx context.Context, req Request) (string, error
 }
 
 func (c *Client) openAIResponses(ctx context.Context, req Request) (string, error) {
+	msgs := resolveMessages(req)
+	input := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		input = append(input, map[string]any{
+			"role":    m.Role,
+			"content": []map[string]any{{"type": "input_text", "text": m.Content}},
+		})
+	}
 	payload := map[string]any{
 		"model": req.Model,
-		"input": []map[string]any{
-			{
-				"role":    "system",
-				"content": []map[string]any{{"type": "input_text", "text": req.SystemPrompt}},
-			},
-			{
-				"role":    "user",
-				"content": []map[string]any{{"type": "input_text", "text": req.UserPrompt}},
-			},
-		},
+		"input": input,
 	}
 	if strings.TrimSpace(req.ReasoningEffort) != "" {
 		payload["reasoning"] = map[string]any{"effort": req.ReasoningEffort}
@@ -148,12 +153,17 @@ func (c *Client) openAIResponses(ctx context.Context, req Request) (string, erro
 }
 
 func (c *Client) openAIChat(ctx context.Context, req Request) (string, error) {
+	msgs := resolveMessages(req)
+	chatMsgs := make([]map[string]string, 0, len(msgs))
+	for _, m := range msgs {
+		chatMsgs = append(chatMsgs, map[string]string{
+			"role":    m.Role,
+			"content": m.Content,
+		})
+	}
 	payload := map[string]any{
-		"model": req.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": req.SystemPrompt},
-			{"role": "user", "content": req.UserPrompt},
-		},
+		"model":    req.Model,
+		"messages": chatMsgs,
 	}
 	if strings.TrimSpace(req.ReasoningEffort) != "" {
 		payload["reasoning_effort"] = req.ReasoningEffort
@@ -269,12 +279,17 @@ func (c *Client) generateClaude(ctx context.Context, req Request) (string, error
 }
 
 func (c *Client) generateDeepSeek(ctx context.Context, req Request) (string, error) {
+	msgs := resolveMessages(req)
+	chatMsgs := make([]map[string]string, 0, len(msgs))
+	for _, m := range msgs {
+		chatMsgs = append(chatMsgs, map[string]string{
+			"role":    m.Role,
+			"content": m.Content,
+		})
+	}
 	payload := map[string]any{
-		"model": req.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": req.SystemPrompt},
-			{"role": "user", "content": req.UserPrompt},
-		},
+		"model":       req.Model,
+		"messages":    chatMsgs,
 		"temperature": 1.0,
 		"stream":      false,
 	}
@@ -363,4 +378,32 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func resolveMessages(req Request) []Message {
+	if len(req.Messages) > 0 {
+		out := make([]Message, 0, len(req.Messages))
+		for _, m := range req.Messages {
+			role := strings.ToLower(strings.TrimSpace(m.Role))
+			if role == "" {
+				role = "user"
+			}
+			content := strings.TrimSpace(m.Content)
+			if content == "" {
+				continue
+			}
+			out = append(out, Message{Role: role, Content: content})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	out := make([]Message, 0, 2)
+	if strings.TrimSpace(req.SystemPrompt) != "" {
+		out = append(out, Message{Role: "system", Content: req.SystemPrompt})
+	}
+	if strings.TrimSpace(req.UserPrompt) != "" {
+		out = append(out, Message{Role: "user", Content: req.UserPrompt})
+	}
+	return out
 }

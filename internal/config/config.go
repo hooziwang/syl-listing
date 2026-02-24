@@ -20,10 +20,17 @@ type OutputConfig struct {
 }
 
 type ProviderConfig struct {
-	BaseURL              string `yaml:"base_url"`
-	APIMode              string `yaml:"api_mode"`
-	Model                string `yaml:"model"`
-	ModelReasoningEffort string `yaml:"model_reasoning_effort"`
+	BaseURL              string                 `yaml:"base_url"`
+	APIMode              string                 `yaml:"api_mode"`
+	Model                string                 `yaml:"model"`
+	ModelReasoningEffort string                 `yaml:"model_reasoning_effort"`
+	ThinkingFallback     ThinkingFallbackConfig `yaml:"thinking_fallback"`
+}
+
+type ThinkingFallbackConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Attempt int    `yaml:"attempt"`
+	Model   string `yaml:"model"`
 }
 
 type Paths struct {
@@ -74,8 +81,21 @@ func (c *Config) applyDefaults() {
 			APIMode:              "chat",
 			Model:                "deepseek-chat",
 			ModelReasoningEffort: "",
+			ThinkingFallback: ThinkingFallbackConfig{
+				Enabled: true,
+				Attempt: 3,
+				Model:   "deepseek-reasoner",
+			},
 		}
 	}
+	ds := c.Providers["deepseek"]
+	if ds.ThinkingFallback.Attempt <= 0 {
+		ds.ThinkingFallback.Attempt = 3
+	}
+	if strings.TrimSpace(ds.ThinkingFallback.Model) == "" {
+		ds.ThinkingFallback.Model = "deepseek-reasoner"
+	}
+	c.Providers["deepseek"] = ds
 	if strings.TrimSpace(c.Provider) != "deepseek" {
 		c.Provider = "deepseek"
 	}
