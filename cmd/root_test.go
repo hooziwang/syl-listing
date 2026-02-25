@@ -42,6 +42,9 @@ func TestNormalizeArgs(t *testing.T) {
 	if got := normalizeArgs([]string{"-v"}); !reflect.DeepEqual(got, []string{"-v"}) {
 		t.Fatalf("unexpected: %#v", got)
 	}
+	if got := normalizeArgs([]string{"set", "key", "abc"}); !reflect.DeepEqual(got, []string{"set", "key", "abc"}) {
+		t.Fatalf("unexpected: %#v", got)
+	}
 }
 
 func TestContainsPositionalSource(t *testing.T) {

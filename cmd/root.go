@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"syl-listing/internal/app"
+	"syl-listing/internal/config"
 )
 
 type genFlags struct {
@@ -45,7 +46,7 @@ func NewRootCmd(stdout, stderr *os.File) *cobra.Command {
 	root.SetErr(stderr)
 	root.CompletionOptions.HiddenDefaultCmd = true
 	bindGenFlags(root, flags)
-	root.PersistentFlags().BoolVarP(&showVersion, "version", "v", false, "显示版本信息")
+	root.Flags().BoolVarP(&showVersion, "version", "v", false, "显示版本信息")
 
 	genCmd := &cobra.Command{
 		Use:           "gen [file_or_dir ...]",
@@ -54,6 +55,8 @@ func NewRootCmd(stdout, stderr *os.File) *cobra.Command {
 		SilenceErrors: true,
 		RunE:          runGen(stdout, stderr, flags, true, &showVersion),
 	}
+	bindGenFlags(genCmd, flags)
+	genCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "显示版本信息")
 	root.AddCommand(genCmd)
 
 	versionCmd := &cobra.Command{
@@ -66,18 +69,50 @@ func NewRootCmd(stdout, stderr *os.File) *cobra.Command {
 		},
 	}
 	root.AddCommand(versionCmd)
+
+	setCmd := &cobra.Command{
+		Use:           "set",
+		Short:         "设置本地参数",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	setKeyCmd := &cobra.Command{
+		Use:                   "key <api_key>",
+		Short:                 "设置 API KEY",
+		Args:                  cobra.ExactArgs(1),
+		SilenceUsage:          true,
+		SilenceErrors:         true,
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := strings.TrimSpace(args[0])
+			if key == "" {
+				return fmt.Errorf("API Key 不能为空")
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("读取当前目录失败：%w", err)
+			}
+			_, paths, err := config.Load(flags.configArg, cwd)
+			if err != nil {
+				return err
+			}
+			return config.UpsertEnvVar(paths.EnvPath, "DEEPSEEK_API_KEY", key)
+		},
+	}
+	setCmd.AddCommand(setKeyCmd)
+	root.AddCommand(setCmd)
 	return root
 }
 
 func bindGenFlags(cmd *cobra.Command, flags *genFlags) {
-	cmd.PersistentFlags().StringVar(&flags.configArg, "config", "", "配置文件路径，默认 ~/.syl-listing/config.yaml")
-	cmd.PersistentFlags().StringVarP(&flags.outputDirArg, "out", "o", "", "输出目录，默认当前目录")
-	cmd.PersistentFlags().IntVarP(&flags.numArg, "num", "n", 0, "每个需求文件生成候选数量")
-	cmd.PersistentFlags().IntVar(&flags.concurrencyArg, "concurrency", 0, "保留参数（当前版本不限制并发）")
-	cmd.PersistentFlags().IntVar(&flags.maxRetriesArg, "max-retries", 0, "最大重试次数")
-	cmd.PersistentFlags().StringVar(&flags.providerArg, "provider", "", "覆盖配置中的 provider（当前仅支持 deepseek）")
-	cmd.PersistentFlags().StringVar(&flags.logFileArg, "log-file", "", "NDJSON 日志文件路径")
-	cmd.PersistentFlags().BoolVar(&flags.verboseArg, "verbose", false, "输出详细 NDJSON（机器友好）")
+	cmd.Flags().StringVar(&flags.configArg, "config", "", "配置文件路径，默认 ~/.syl-listing/config.yaml")
+	cmd.Flags().StringVarP(&flags.outputDirArg, "out", "o", "", "输出目录，默认当前目录")
+	cmd.Flags().IntVarP(&flags.numArg, "num", "n", 0, "每个需求文件生成候选数量")
+	cmd.Flags().IntVar(&flags.concurrencyArg, "concurrency", 0, "保留参数（当前版本不限制并发）")
+	cmd.Flags().IntVar(&flags.maxRetriesArg, "max-retries", 0, "最大重试次数")
+	cmd.Flags().StringVar(&flags.providerArg, "provider", "", "覆盖配置中的 provider（当前仅支持 deepseek）")
+	cmd.Flags().StringVar(&flags.logFileArg, "log-file", "", "NDJSON 日志文件路径")
+	cmd.Flags().BoolVar(&flags.verboseArg, "verbose", false, "输出详细 NDJSON（机器友好）")
 }
 
 func runGen(stdout, stderr *os.File, flags *genFlags, subcommand bool, showVersion *bool) func(*cobra.Command, []string) error {
@@ -166,7 +201,7 @@ func normalizeArgs(args []string) []string {
 	}
 	first := args[0]
 	switch first {
-	case "gen", "help", "completion", "version":
+	case "gen", "help", "completion", "version", "set":
 		return args
 	}
 	if first == "-h" || first == "--help" || first == "-v" || first == "--version" {
