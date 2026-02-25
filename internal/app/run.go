@@ -100,7 +100,7 @@ func Run(opts Options) (result Result, err error) {
 		return Result{}, err
 	}
 
-	envMap, apiKey, err := ensureDeepSeekAPIKey(paths, cfg.APIKeyEnv, cfg.MaxRetries, opts.Stdout, opts.Stdin)
+	envMap, apiKey, err := ensureDeepSeekAPIKey(paths, cfg.APIKeyEnv)
 	if err != nil {
 		return Result{}, err
 	}
