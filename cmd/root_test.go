@@ -29,6 +29,19 @@ func TestFormatSummaryBalance(t *testing.T) {
 	}
 }
 
+func TestExtractRulesTag(t *testing.T) {
+	cases := map[string]string{
+		"规则中心更新成功（rules-v2026.02.25-2）": "rules-v2026.02.25-2",
+		"规则已是最新版本(rules-v2026.02.25)":   "rules-v2026.02.25",
+		"规则更新完成":                        "",
+	}
+	for in, want := range cases {
+		if got := extractRulesTag(in); got != want {
+			t.Fatalf("extractRulesTag(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestNormalizeArgs(t *testing.T) {
 	if got := normalizeArgs([]string{"a.md"}); !reflect.DeepEqual(got, []string{"gen", "a.md"}) {
 		t.Fatalf("unexpected: %#v", got)
@@ -43,6 +56,9 @@ func TestNormalizeArgs(t *testing.T) {
 		t.Fatalf("unexpected: %#v", got)
 	}
 	if got := normalizeArgs([]string{"set", "key", "abc"}); !reflect.DeepEqual(got, []string{"set", "key", "abc"}) {
+		t.Fatalf("unexpected: %#v", got)
+	}
+	if got := normalizeArgs([]string{"update", "rules"}); !reflect.DeepEqual(got, []string{"update", "rules"}) {
 		t.Fatalf("unexpected: %#v", got)
 	}
 }

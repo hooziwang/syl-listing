@@ -21,6 +21,9 @@ type genFlags struct {
 	verboseArg     bool
 }
 
+var loadConfigForUpdate = config.Load
+var syncRulesForUpdate = config.SyncRulesFromCenter
+
 func Execute() error {
 	root := NewRootCmd(os.Stdout, os.Stderr)
 	root.SetArgs(normalizeArgs(os.Args[1:]))
@@ -101,6 +104,35 @@ func NewRootCmd(stdout, stderr *os.File) *cobra.Command {
 	}
 	setCmd.AddCommand(setKeyCmd)
 	root.AddCommand(setCmd)
+
+	updateCmd := &cobra.Command{
+		Use:           "update",
+		Short:         "更新本地资源",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	updateRulesCmd := &cobra.Command{
+		Use:           "rules",
+		Short:         "清除本地规则缓存并重新下载最新规则",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("读取当前目录失败：%w", err)
+			}
+			msg, err := runUpdateRules(flags.configArg, cwd)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(msg) != "" {
+				fmt.Fprintln(stdout, msg)
+			}
+			return nil
+		},
+	}
+	updateCmd.AddCommand(updateRulesCmd)
+	root.AddCommand(updateCmd)
 	return root
 }
 
@@ -201,7 +233,7 @@ func normalizeArgs(args []string) []string {
 	}
 	first := args[0]
 	switch first {
-	case "gen", "help", "completion", "version", "set":
+	case "gen", "help", "completion", "version", "set", "update":
 		return args
 	}
 	if first == "-h" || first == "--help" || first == "-v" || first == "--version" {
@@ -211,6 +243,54 @@ func normalizeArgs(args []string) []string {
 		return args
 	}
 	return append([]string{"gen"}, args...)
+}
+
+func runUpdateRules(configArg, cwd string) (string, error) {
+	cfg, paths, err := loadConfigForUpdate(configArg, cwd)
+	if err != nil {
+		return "", err
+	}
+	if err := os.RemoveAll(paths.ResolvedRulesDir); err != nil {
+		return "", fmt.Errorf("清除本地规则缓存失败：%w", err)
+	}
+	if err := os.Remove(paths.RulesLockPath); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("清除规则锁失败：%w", err)
+	}
+	cfg.RulesCenter.Release = "latest"
+	cfg.RulesCenter.Strict = true
+	res, err := syncRulesForUpdate(cfg, paths)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(res.Warning) != "" {
+		return "", fmt.Errorf(strings.TrimSpace(res.Warning))
+	}
+	msg := strings.TrimSpace(res.Message)
+	if msg == "" {
+		msg = "规则更新完成"
+	}
+	if tag := extractRulesTag(msg); tag != "" {
+		return tag, nil
+	}
+	return msg, nil
+}
+
+func extractRulesTag(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	l := strings.LastIndex(msg, "（")
+	r := strings.LastIndex(msg, "）")
+	if l >= 0 && r > l+1 {
+		return strings.TrimSpace(msg[l+len("（") : r])
+	}
+	l = strings.LastIndex(msg, "(")
+	r = strings.LastIndex(msg, ")")
+	if l >= 0 && r > l+1 {
+		return strings.TrimSpace(msg[l+1 : r])
+	}
+	return ""
 }
 
 func containsPositionalSource(args []string) bool {

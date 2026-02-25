@@ -62,7 +62,7 @@ scoop bucket rm hooziwang; scoop bucket add hooziwang https://github.com/hooziwa
 - keyword two
 ```
 
-2. 首次运行（会自动初始化 `~/.syl-listing/config.yaml`、`~/.syl-listing/.env.example`，并自动准备规则缓存）：
+2. 首次运行（会自动初始化 `~/.syl-listing/config.yaml`，并自动准备规则缓存）：
 
 ```bash
 syl-listing demo.md
@@ -71,8 +71,7 @@ syl-listing demo.md
 3. 填写密钥：
 
 ```bash
-cp ~/.syl-listing/.env.example ~/.syl-listing/.env
-# 编辑 ~/.syl-listing/.env，填入可用 key
+syl-listing set key <api_key>
 ```
 
 4. 再次运行生成：
@@ -91,6 +90,7 @@ syl-listing demo.md
 ```bash
 syl-listing [file_or_dir ...]
 syl-listing gen [file_or_dir ...]
+syl-listing update rules
 syl-listing version
 ```
 
@@ -108,6 +108,9 @@ syl-listing ./requirements --verbose --log-file ./run.ndjson
 
 # 使用子命令形式
 syl-listing gen ./requirements -n 2
+
+# 清空本地规则缓存并重新拉取规则中心 latest
+syl-listing update rules
 ```
 
 ## 自动初始化
@@ -115,60 +118,11 @@ syl-listing gen ./requirements -n 2
 首次运行会自动创建：
 
 - `~/.syl-listing/config.yaml`
-- `~/.syl-listing/.env.example`
 - 规则缓存目录与规则锁文件（位于系统缓存目录，程序自动维护）
 
-并要求手动创建：
+如未配置 key，程序会提示执行：
 
-- `~/.syl-listing/.env`
-
-## .env 必填项
-
-实际读取变量名由 `api_key_env` 控制，默认只需要：
-
-```dotenv
-# DeepSeek（英文生成 + 中文翻译都使用该 key）
-DEEPSEEK_API_KEY=
-```
-
-## 规则文件（集中管理）
-
-规则文件由程序自动同步并缓存，不需要用户配置路径。
-
-- `title.yaml`
-- `bullets.yaml`
-- `description.yaml`
-- `search_terms.yaml`
-
-每一步只加载对应规则文件。每个规则文件同时包含：
-
-- `instruction`：给模型的规则描述
-- `constraints` / `output`：给程序校验的结构化约束
-
-程序直接把该规则文件原文作为 `system`，并解析同一文件做校验，不做二次拼接。
-规则推荐由独立仓库 `syl-listing-rules` 统一发布，客户端启动时自动同步到本机缓存。
-
-不建议终端用户手改本地规则文件；规则变更应通过规则中心仓库发版。
-
-`title.yaml` 最小示例：
-
-```yaml
-version: 1
-section: title
-language: en
-purpose: 生成英文标题
-output:
-  format: text
-  lines: 1
-constraints:
-  max_chars:
-    value: 200
-    hard: true
-instruction: |
-  只输出 1 行英文标题，不要解释。
-```
-
-`bullets.yaml`、`description.yaml`、`search_terms.yaml` 与此结构一致，仅 `section`、`output`、`constraints` 不同。
+- `syl-listing set key <api_key>`
 
 ## 生成流程
 
@@ -200,40 +154,6 @@ instruction: |
 - 默认：终端输出简洁的人类可读进度日志。
 - `--verbose`：终端输出详细 NDJSON（机器友好，包含模型请求/响应内容）。
 - `--log-file`：额外写入 NDJSON 到文件；默认模式下仅文件是 NDJSON。
-
-## 配置文件示例
-
-```yaml
-provider: deepseek
-api_key_env: DEEPSEEK_API_KEY
-rules_center:
-  owner: hooziwang
-  repo: syl-listing-rules
-  release: latest
-  asset: rules-bundle.tar.gz
-  timeout_sec: 20
-  strict: false
-char_tolerance: 20
-concurrency: 0
-max_retries: 3
-request_timeout_sec: 300
-output:
-  dir: .
-  num: 1
-providers:
-  deepseek:
-    base_url: https://api.deepseek.com
-    api_mode: chat
-    model: deepseek-chat
-    model_reasoning_effort: ""
-    thinking_fallback:
-      enabled: true
-      attempt: 3
-      model: deepseek-reasoner
-```
-
-翻译固定使用 `providers.deepseek`（与生成共享同一 DeepSeek 配置与 key）。
-`char_tolerance` 用于字符数校验容差（默认 20）：若规则只有 `max`，则放宽为 `(-inf,max+20]`；若规则同时有 `min/max`，则放宽为 `[min-20,max+20]`。
 
 ## 校验与容差
 
@@ -268,11 +188,11 @@ providers:
 - `文件不是 listing 需求格式（缺少首行标志）`：
   检查首个非空行是否为 `===Listing Requirements===`。
 - `缺少规则文件`：
-  检查规则中心发布资产是否存在，或重新运行命令让程序自动重建本机规则缓存。
+  检查规则中心发布资产是否存在，或执行 `syl-listing update rules` 强制重建本机规则缓存。
 - `规则中心警告：...`：
   默认会先尝试规则中心同步；当 `rules_center.strict=false` 时会回退本地缓存继续运行；若要强制失败可设为 `strict=true`。
-- `... 为空。先复制 .../.env.example 为 .../.env 并填写 key`：
-  复制并填写 `.env`，确认变量名与 `config.yaml` 对齐。
+- `尚未配置 API KEY`：
+  执行 `syl-listing set key <api_key>`。
 - 生成慢或超时：
   降低 `max_retries`，调整 `request_timeout_sec`，或切换更快模型。
 - 翻译失败：
