@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+func boolPtr(v bool) *bool { return &v }
+
 func writeRuleFiles(t *testing.T, dir string) {
 	t.Helper()
 	files := map[string]string{
@@ -22,6 +24,13 @@ constraints:
   max_chars:
     value: 200
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 		"bullets.yaml": `version: 1
@@ -29,7 +38,7 @@ section: bullets
 language: en
 purpose: b
 output:
-  format: plain_text
+  format: json_object
   lines: 5
 constraints:
   min_chars_per_line:
@@ -37,6 +46,14 @@ constraints:
   max_chars_per_line:
     value: 20
 forbidden: []
+execution:
+  generation:
+    protocol: json_lines
+  repair:
+    granularity: item
+    item_json_field: item
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 		"description.yaml": `version: 1
@@ -48,6 +65,13 @@ output:
   paragraphs: 2
 constraints: {}
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 		"search_terms.yaml": `version: 1
@@ -61,6 +85,13 @@ constraints:
   max_chars:
     value: 100
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 	}
@@ -129,7 +160,7 @@ func TestReadSectionRulesMissingAndInvalid(t *testing.T) {
 
 	writeRuleFiles(t, d)
 	// break one rule to hit validate error path
-	if err := os.WriteFile(filepath.Join(d, "title.yaml"), []byte("section: title\ninstruction: x\noutput:\n  lines: 2\nconstraints:\n  max_chars:\n    value: 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(d, "title.yaml"), []byte("section: title\ninstruction: x\noutput:\n  lines: 2\nconstraints:\n  max_chars:\n    value: 1\nexecution:\n  generation:\n    protocol: text\n  repair:\n    granularity: whole\n  fallback:\n    disable_thinking_on_length_error: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadSectionRules(d); err == nil {
@@ -167,8 +198,13 @@ func TestValidateSectionRuleCases(t *testing.T) {
 	title := SectionRule{
 		Section:     "title",
 		Instruction: "x",
-		Output:      RuleOutputSpec{Lines: 1},
+		Output:      RuleOutputSpec{Format: "plain_text", Lines: 1},
 		Constraints: RuleConstraints{MaxChars: RuleIntConstraint{Value: 1}},
+		Execution: RuleExecutionSpec{
+			Generation: RuleGenerationSpec{Protocol: "text"},
+			Repair:     RuleRepairPolicySpec{Granularity: "whole"},
+			Fallback:   RuleFallbackPolicySpec{DisableThinkingOnLengthError: boolPtr(true)},
+		},
 	}
 	if err := validateSectionRule(title, "title.yaml", "/tmp/title.yaml"); err != nil {
 		t.Fatalf("title should pass: %v", err)
@@ -177,19 +213,43 @@ func TestValidateSectionRuleCases(t *testing.T) {
 	bullets := SectionRule{
 		Section:     "bullets",
 		Instruction: "x",
-		Output:      RuleOutputSpec{Lines: 5},
+		Output:      RuleOutputSpec{Format: "json_object", Lines: 5},
 		Constraints: RuleConstraints{MinCharsPerLine: RuleIntConstraint{Value: 2}, MaxCharsPerLine: RuleIntConstraint{Value: 1}},
+		Execution: RuleExecutionSpec{
+			Generation: RuleGenerationSpec{Protocol: "json_lines"},
+			Repair:     RuleRepairPolicySpec{Granularity: "item", ItemJSONField: "item"},
+			Fallback:   RuleFallbackPolicySpec{DisableThinkingOnLengthError: boolPtr(true)},
+		},
 	}
 	if err := validateSectionRule(bullets, "bullets.yaml", "/tmp/bullets.yaml"); err == nil {
 		t.Fatalf("expected min>max error")
 	}
 
-	desc := SectionRule{Section: "description", Instruction: "x", Output: RuleOutputSpec{Paragraphs: 0}}
+	desc := SectionRule{
+		Section:     "description",
+		Instruction: "x",
+		Output:      RuleOutputSpec{Format: "plain_text", Paragraphs: 0},
+		Execution: RuleExecutionSpec{
+			Generation: RuleGenerationSpec{Protocol: "text"},
+			Repair:     RuleRepairPolicySpec{Granularity: "whole"},
+			Fallback:   RuleFallbackPolicySpec{DisableThinkingOnLengthError: boolPtr(true)},
+		},
+	}
 	if err := validateSectionRule(desc, "description.yaml", "/tmp/description.yaml"); err == nil {
 		t.Fatalf("expected description paragraphs error")
 	}
 
-	search := SectionRule{Section: "search_terms", Instruction: "x", Output: RuleOutputSpec{Lines: 1}, Constraints: RuleConstraints{MaxChars: RuleIntConstraint{Value: 10}}}
+	search := SectionRule{
+		Section:     "search_terms",
+		Instruction: "x",
+		Output:      RuleOutputSpec{Format: "plain_text", Lines: 1},
+		Constraints: RuleConstraints{MaxChars: RuleIntConstraint{Value: 10}},
+		Execution: RuleExecutionSpec{
+			Generation: RuleGenerationSpec{Protocol: "text"},
+			Repair:     RuleRepairPolicySpec{Granularity: "whole"},
+			Fallback:   RuleFallbackPolicySpec{DisableThinkingOnLengthError: boolPtr(true)},
+		},
+	}
 	if err := validateSectionRule(search, "search_terms.yaml", "/tmp/search_terms.yaml"); err != nil {
 		t.Fatalf("search_terms should pass: %v", err)
 	}

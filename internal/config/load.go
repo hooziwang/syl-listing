@@ -163,6 +163,35 @@ func validateSectionRule(rule SectionRule, filename, path string) error {
 	if strings.TrimSpace(rule.Instruction) == "" {
 		return fmt.Errorf("规则文件缺少 instruction（%s）", path)
 	}
+	protocol := strings.TrimSpace(strings.ToLower(rule.Execution.Generation.Protocol))
+	if protocol == "" {
+		return fmt.Errorf("规则文件缺少 execution.generation.protocol（%s）", path)
+	}
+	if protocol != "text" && protocol != "json_lines" {
+		return fmt.Errorf("execution.generation.protocol 仅支持 text/json_lines（%s）", path)
+	}
+	if protocol == "text" && strings.TrimSpace(strings.ToLower(rule.Output.Format)) != "plain_text" {
+		return fmt.Errorf("execution.generation.protocol=text 时 output.format 必须为 plain_text（%s）", path)
+	}
+	if protocol == "json_lines" && strings.TrimSpace(strings.ToLower(rule.Output.Format)) != "json_object" {
+		return fmt.Errorf("execution.generation.protocol=json_lines 时 output.format 必须为 json_object（%s）", path)
+	}
+	granularity := strings.TrimSpace(strings.ToLower(rule.Execution.Repair.Granularity))
+	if granularity == "" {
+		return fmt.Errorf("规则文件缺少 execution.repair.granularity（%s）", path)
+	}
+	if granularity != "whole" && granularity != "item" {
+		return fmt.Errorf("execution.repair.granularity 仅支持 whole/item（%s）", path)
+	}
+	if granularity == "item" && rule.Output.Lines <= 1 {
+		return fmt.Errorf("execution.repair.granularity=item 需要 output.lines > 1（%s）", path)
+	}
+	if granularity == "item" && strings.TrimSpace(rule.Execution.Repair.ItemJSONField) == "" {
+		return fmt.Errorf("execution.repair.granularity=item 时必须提供 execution.repair.item_json_field（%s）", path)
+	}
+	if rule.Execution.Fallback.DisableThinkingOnLengthError == nil {
+		return fmt.Errorf("规则文件缺少 execution.fallback.disable_thinking_on_length_error（%s）", path)
+	}
 	expectedSection := strings.TrimSuffix(filename, ".yaml")
 	if expectedSection == "search_terms" {
 		expectedSection = "search_terms"

@@ -71,6 +71,9 @@ func TestGenerateENAndTranslateCNBySections_OpenAIPath(t *testing.T) {
 		Category:        "Cat",
 		Keywords:        []string{"alpha", "beta"},
 	}
+	rules := testRules()
+	rules.Bullets.Parsed.Execution.Generation.Protocol = "text"
+	rules.Bullets.Parsed.Execution.Repair.Granularity = "whole"
 	en, cn, enMS, cnMS, err := generateENAndTranslateCNBySections(bilingualGenerateOptions{
 		Req:                  req,
 		CharTolerance:        20,
@@ -78,7 +81,7 @@ func TestGenerateENAndTranslateCNBySections_OpenAIPath(t *testing.T) {
 		ProviderCfg:          config.ProviderConfig{BaseURL: ts.URL, APIMode: "chat", Model: "gpt"},
 		TranslateProviderCfg: config.ProviderConfig{BaseURL: ts.URL, Model: "deepseek-chat"},
 		APIKey:               "k",
-		Rules:                testRules(),
+		Rules:                rules,
 		MaxRetries:           0,
 		Client:               llm.NewClient(10 * time.Second),
 		TranslateClient:      translator.NewClient(10 * time.Second),

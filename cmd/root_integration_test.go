@@ -37,6 +37,13 @@ constraints:
   must_contain_top_n_keywords:
     value: 1
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 		"bullets.yaml": `version: 1
@@ -52,6 +59,14 @@ constraints:
   max_chars_per_line:
     value: 120
 forbidden: []
+execution:
+  generation:
+    protocol: json_lines
+  repair:
+    granularity: item
+    item_json_field: item
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 		"description.yaml": `version: 1
@@ -63,6 +78,13 @@ output:
   paragraphs: 2
 constraints: {}
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 		"search_terms.yaml": `version: 1
@@ -76,6 +98,13 @@ constraints:
   max_chars:
     value: 120
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: x
 `,
 	}

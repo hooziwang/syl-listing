@@ -120,8 +120,12 @@ func generateENAndTranslateCNBySections(opts bilingualGenerateOptions) (ListingD
 		return ListingDocument{}, ListingDocument{}, 0, 0, err
 	}
 	var enBullets []string
-	if strings.EqualFold(opts.Provider, "deepseek") {
-		items, itemLatency, itemErr := generateBulletsWithJSONAndRepair(enSectionOpts, enDoc, bulletRule)
+	bulletPolicy := resolveSectionExecutionPolicy(bulletRule)
+	if bulletPolicy.useJSONLines() {
+		if !providerSupportsJSONMode(opts.Provider) {
+			return ListingDocument{}, ListingDocument{}, 0, 0, fmt.Errorf("provider %s 不支持 json_lines 协议", opts.Provider)
+		}
+		items, itemLatency, itemErr := generateJSONLinesWithRepair(enSectionOpts, "bullets", enDoc, bulletRule)
 		_ = itemLatency
 		if itemErr != nil {
 			return ListingDocument{}, ListingDocument{}, 0, 0, itemErr

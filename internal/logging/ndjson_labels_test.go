@@ -8,11 +8,11 @@ import (
 )
 
 func TestGenerateAndTranslateLabelsCoverage(t *testing.T) {
-	if label, key, ok := humanGenerateLabel("bullets_item_1"); !ok || label == "" || key != "gen_bullets" {
+	if label, key, ok := humanGenerateLabel("bullets_item_1"); !ok || label == "" || key != "gen_bullets_item_1" {
 		t.Fatalf("unexpected bullets_item_1 generate label: %q %q %v", label, key, ok)
 	}
-	if _, _, ok := humanGenerateLabel("bullets_item_2"); ok {
-		t.Fatalf("bullets_item_2 should be hidden in human log")
+	if label, key, ok := humanGenerateLabel("bullets_item_2"); !ok || label == "" || key != "gen_bullets_item_2" {
+		t.Fatalf("unexpected bullets_item_2 generate label: %q %q %v", label, key, ok)
 	}
 	if label, _, ok := humanGenerateLabel("search_terms"); !ok || label == "" {
 		t.Fatalf("search_terms label missing")
@@ -33,8 +33,8 @@ func TestRequestResponseLabelCoverage(t *testing.T) {
 	if label, key, ok := humanRequestLabel("translate_title"); !ok || label == "" || key != "tr_title" {
 		t.Fatalf("unexpected translate request label: %q %q %v", label, key, ok)
 	}
-	if label, key, ok := humanRequestLabel("bullets_item_2"); ok || label != "" || key != "" {
-		t.Fatalf("bullets_item_2 request should be hidden")
+	if label, key, ok := humanRequestLabel("bullets_item_2"); !ok || label == "" || key != "gen_bullets_item_2" {
+		t.Fatalf("bullets_item_2 request should be shown, got label=%q key=%q ok=%v", label, key, ok)
 	}
 	if label, key, ok := humanRequestLabel("unknown"); ok || label != "" || key != "" {
 		t.Fatalf("unknown request should be hidden")

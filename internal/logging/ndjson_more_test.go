@@ -44,7 +44,7 @@ func TestHumanLabelsAndStepLabel(t *testing.T) {
 			t.Fatalf("unexpected generate_ok line: %s", line)
 		}
 	}
-	if humanStepLabel("bullets_item_2") != "英文五点描述生成" {
+	if humanStepLabel("bullets_item_2") != "英文五点第2条修复" {
 		t.Fatalf("humanStepLabel bullets mismatch")
 	}
 	if humanStepLabel("translate_keyword_2") != "中文分类与关键词翻译" {

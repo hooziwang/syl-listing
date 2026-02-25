@@ -24,6 +24,27 @@ type RuleOutputSpec struct {
 	ParagraphSeparator string `yaml:"paragraph_separator"`
 }
 
+type RuleExecutionSpec struct {
+	Priority   []string               `yaml:"priority"`
+	HardRule   string                 `yaml:"hard_rule"`
+	Generation RuleGenerationSpec     `yaml:"generation"`
+	Repair     RuleRepairPolicySpec   `yaml:"repair"`
+	Fallback   RuleFallbackPolicySpec `yaml:"fallback"`
+}
+
+type RuleGenerationSpec struct {
+	Protocol string `yaml:"protocol"`
+}
+
+type RuleRepairPolicySpec struct {
+	Granularity   string `yaml:"granularity"`
+	ItemJSONField string `yaml:"item_json_field"`
+}
+
+type RuleFallbackPolicySpec struct {
+	DisableThinkingOnLengthError *bool `yaml:"disable_thinking_on_length_error"`
+}
+
 type RuleConstraints struct {
 	MaxChars                RuleIntConstraint     `yaml:"max_chars"`
 	MinCharsPerLine         RuleIntConstraint     `yaml:"min_chars_per_line"`
@@ -32,14 +53,15 @@ type RuleConstraints struct {
 }
 
 type SectionRule struct {
-	Version     int             `yaml:"version"`
-	Section     string          `yaml:"section"`
-	Language    string          `yaml:"language"`
-	Purpose     string          `yaml:"purpose"`
-	Output      RuleOutputSpec  `yaml:"output"`
-	Constraints RuleConstraints `yaml:"constraints"`
-	Forbidden   []string        `yaml:"forbidden"`
-	Instruction string          `yaml:"instruction"`
+	Version     int               `yaml:"version"`
+	Section     string            `yaml:"section"`
+	Language    string            `yaml:"language"`
+	Purpose     string            `yaml:"purpose"`
+	Output      RuleOutputSpec    `yaml:"output"`
+	Constraints RuleConstraints   `yaml:"constraints"`
+	Forbidden   []string          `yaml:"forbidden"`
+	Execution   RuleExecutionSpec `yaml:"execution"`
+	Instruction string            `yaml:"instruction"`
 }
 
 type SectionRuleFile struct {
@@ -76,4 +98,11 @@ func (s SectionRules) BulletCount() int {
 
 func (s SectionRules) DescriptionParagraphs() int {
 	return s.Description.Parsed.Output.Paragraphs
+}
+
+func (r SectionRule) DisableThinkingFallbackOnLengthError() bool {
+	if r.Execution.Fallback.DisableThinkingOnLengthError == nil {
+		return false
+	}
+	return *r.Execution.Fallback.DisableThinkingOnLengthError
 }

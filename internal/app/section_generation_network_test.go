@@ -133,6 +133,8 @@ func TestGenerateDocumentBySectionsOpenAI(t *testing.T) {
 	client := llm.NewClient(10 * time.Second)
 
 	rules := testRules()
+	rules.Bullets.Parsed.Execution.Generation.Protocol = "text"
+	rules.Bullets.Parsed.Execution.Repair.Granularity = "whole"
 	req := listing.Requirement{
 		SourcePath:      "/tmp/a.md",
 		BodyAfterMarker: "body",
@@ -240,10 +242,15 @@ func TestGenerateBulletsWithJSONAndRepair(t *testing.T) {
 	rule := config.SectionRuleFile{
 		Raw: "rule",
 		Parsed: config.SectionRule{
-			Output: config.RuleOutputSpec{Lines: 5},
+			Output: config.RuleOutputSpec{Format: "json_object", Lines: 5},
 			Constraints: config.RuleConstraints{
 				MinCharsPerLine: config.RuleIntConstraint{Value: 10},
 				MaxCharsPerLine: config.RuleIntConstraint{Value: 40},
+			},
+			Execution: config.RuleExecutionSpec{
+				Generation: config.RuleGenerationSpec{Protocol: "json_lines"},
+				Repair:     config.RuleRepairPolicySpec{Granularity: "item", ItemJSONField: "item"},
+				Fallback:   config.RuleFallbackPolicySpec{DisableThinkingOnLengthError: boolPtrApp(true)},
 			},
 		},
 	}

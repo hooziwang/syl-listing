@@ -34,6 +34,13 @@ constraints:
   must_contain_top_n_keywords:
     value: 1
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: |
   only output title
 `,
@@ -50,6 +57,14 @@ constraints:
   max_chars_per_line:
     value: 120
 forbidden: []
+execution:
+  generation:
+    protocol: json_lines
+  repair:
+    granularity: item
+    item_json_field: item
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: |
   only output bullets json
 `,
@@ -62,6 +77,13 @@ output:
   paragraphs: 2
 constraints: {}
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: |
   only output description
 `,
@@ -76,6 +98,13 @@ constraints:
   max_chars:
     value: 120
 forbidden: []
+execution:
+  generation:
+    protocol: text
+  repair:
+    granularity: whole
+  fallback:
+    disable_thinking_on_length_error: true
 instruction: |
   only output search terms
 `,

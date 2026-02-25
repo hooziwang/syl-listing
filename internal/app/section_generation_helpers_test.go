@@ -9,12 +9,46 @@ import (
 	"syl-listing/internal/listing"
 )
 
+func boolPtrApp(v bool) *bool { return &v }
+
 func testRules() config.SectionRules {
+	disableThinking := true
 	return config.SectionRules{
-		Title:       config.SectionRuleFile{Raw: " title rule ", Parsed: config.SectionRule{Output: config.RuleOutputSpec{Lines: 1}, Constraints: config.RuleConstraints{MaxChars: config.RuleIntConstraint{Value: 200}, MustContainTopNKeywords: config.RuleKeywordConstraint{Value: 2}}}},
-		Bullets:     config.SectionRuleFile{Parsed: config.SectionRule{Output: config.RuleOutputSpec{Lines: 5}, Constraints: config.RuleConstraints{MinCharsPerLine: config.RuleIntConstraint{Value: 10}, MaxCharsPerLine: config.RuleIntConstraint{Value: 40}}}},
-		Description: config.SectionRuleFile{Parsed: config.SectionRule{Output: config.RuleOutputSpec{Paragraphs: 2}}},
-		SearchTerms: config.SectionRuleFile{Parsed: config.SectionRule{Output: config.RuleOutputSpec{Lines: 1}, Constraints: config.RuleConstraints{MaxChars: config.RuleIntConstraint{Value: 50}}}},
+		Title: config.SectionRuleFile{Raw: " title rule ", Parsed: config.SectionRule{
+			Output:      config.RuleOutputSpec{Lines: 1},
+			Constraints: config.RuleConstraints{MaxChars: config.RuleIntConstraint{Value: 200}, MustContainTopNKeywords: config.RuleKeywordConstraint{Value: 2}},
+			Execution: config.RuleExecutionSpec{
+				Generation: config.RuleGenerationSpec{Protocol: "text"},
+				Repair:     config.RuleRepairPolicySpec{Granularity: "whole"},
+				Fallback:   config.RuleFallbackPolicySpec{DisableThinkingOnLengthError: &disableThinking},
+			},
+		}},
+		Bullets: config.SectionRuleFile{Parsed: config.SectionRule{
+			Output:      config.RuleOutputSpec{Format: "json_object", Lines: 5},
+			Constraints: config.RuleConstraints{MinCharsPerLine: config.RuleIntConstraint{Value: 10}, MaxCharsPerLine: config.RuleIntConstraint{Value: 40}},
+			Execution: config.RuleExecutionSpec{
+				Generation: config.RuleGenerationSpec{Protocol: "json_lines"},
+				Repair:     config.RuleRepairPolicySpec{Granularity: "item", ItemJSONField: "item"},
+				Fallback:   config.RuleFallbackPolicySpec{DisableThinkingOnLengthError: &disableThinking},
+			},
+		}},
+		Description: config.SectionRuleFile{Parsed: config.SectionRule{
+			Output: config.RuleOutputSpec{Paragraphs: 2},
+			Execution: config.RuleExecutionSpec{
+				Generation: config.RuleGenerationSpec{Protocol: "text"},
+				Repair:     config.RuleRepairPolicySpec{Granularity: "whole"},
+				Fallback:   config.RuleFallbackPolicySpec{DisableThinkingOnLengthError: &disableThinking},
+			},
+		}},
+		SearchTerms: config.SectionRuleFile{Parsed: config.SectionRule{
+			Output:      config.RuleOutputSpec{Lines: 1},
+			Constraints: config.RuleConstraints{MaxChars: config.RuleIntConstraint{Value: 50}},
+			Execution: config.RuleExecutionSpec{
+				Generation: config.RuleGenerationSpec{Protocol: "text"},
+				Repair:     config.RuleRepairPolicySpec{Granularity: "whole"},
+				Fallback:   config.RuleFallbackPolicySpec{DisableThinkingOnLengthError: &disableThinking},
+			},
+		}},
 	}
 }
 
@@ -52,8 +86,8 @@ func TestJSONParsers(t *testing.T) {
 	if err != nil || line != "abc" {
 		t.Fatalf("parseBulletItemFromJSON failed: %v, %s", err, line)
 	}
-	if _, err := parseBulletItemFromJSON(`{"x":"y"}`); err == nil {
-		t.Fatalf("expected missing field error")
+	if line, err := parseBulletItemFromJSON(`{"x":"y"}`); err != nil || line != "y" {
+		t.Fatalf("expected fallback first-string parse, err=%v line=%q", err, line)
 	}
 	if err := decodeJSONObject("", &map[string]any{}); err == nil {
 		t.Fatalf("expected empty json error")
@@ -74,7 +108,7 @@ func TestPromptBuilders(t *testing.T) {
 		t.Fatalf("unexpected user prompt: %s", up)
 	}
 	rp := buildSectionRepairPrompt("bullets", []string{"a", "b"})
-	if !strings.Contains(rp, "bullet points") {
+	if !strings.Contains(rp, "bullets") {
 		t.Fatalf("unexpected repair prompt: %s", rp)
 	}
 	jp := buildJSONRepairPrompt("bad", `{"x":1}`)
@@ -91,14 +125,18 @@ func TestResolveModelForAttempt(t *testing.T) {
 			ThinkingFallback: config.ThinkingFallbackConfig{Enabled: true, Attempt: 3, Model: "deepseek-reasoner"},
 		},
 	}
-	if m, fb := resolveModelForAttempt(opts, 2); m != "deepseek-chat" || fb {
+	rule := testRules().Bullets
+	if m, fb := resolveModelForAttempt(opts, rule, 2, false); m != "deepseek-chat" || fb {
 		t.Fatalf("unexpected before fallback: %s %v", m, fb)
 	}
-	if m, fb := resolveModelForAttempt(opts, 3); m != "deepseek-reasoner" || !fb {
+	if m, fb := resolveModelForAttempt(opts, rule, 3, false); m != "deepseek-reasoner" || !fb {
 		t.Fatalf("unexpected fallback: %s %v", m, fb)
 	}
+	if m, fb := resolveModelForAttempt(opts, rule, 3, true); m != "deepseek-chat" || fb {
+		t.Fatalf("length issue should disable thinking fallback: %s %v", m, fb)
+	}
 	opts.Provider = "openai"
-	if m, fb := resolveModelForAttempt(opts, 3); m == "" || fb {
+	if m, fb := resolveModelForAttempt(opts, rule, 3, false); m == "" || fb {
 		t.Fatalf("unexpected non-deepseek fallback")
 	}
 }

@@ -99,10 +99,10 @@ func TestBuildRepairTrimPadAndValidateDocBranches(t *testing.T) {
 	if !strings.Contains(buildSectionRepairPrompt("title", []string{"a"}), "title") {
 		t.Fatalf("title repair label missing")
 	}
-	if !strings.Contains(buildSectionRepairPrompt("description", []string{"a"}), "product description") {
+	if !strings.Contains(buildSectionRepairPrompt("description", []string{"a"}), "description") {
 		t.Fatalf("description repair label missing")
 	}
-	if !strings.Contains(buildSectionRepairPrompt("search_terms", []string{"a"}), "search terms") {
+	if !strings.Contains(buildSectionRepairPrompt("search_terms", []string{"a"}), "search terms") && !strings.Contains(buildSectionRepairPrompt("search_terms", []string{"a"}), "search_terms") {
 		t.Fatalf("search_terms repair label missing")
 	}
 	if !strings.Contains(buildSectionRepairPrompt("unknown", []string{"a"}), "unknown") {

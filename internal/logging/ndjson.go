@@ -249,8 +249,14 @@ func humanGenerateLabel(step string) (string, string, bool) {
 	switch {
 	case step == "title":
 		return "英文标题生成", "gen_title", true
-	case step == "bullets", strings.HasPrefix(step, "bullets_item_"):
-		return "英文五点描述生成", "gen_bullets", step == "bullets" || indexedStepIsOne(step, "bullets_item_")
+	case step == "bullets":
+		return "英文五点描述生成", "gen_bullets", true
+	case strings.HasPrefix(step, "bullets_item_"):
+		idx := strings.TrimSpace(strings.TrimPrefix(step, "bullets_item_"))
+		if idx == "" {
+			idx = "?"
+		}
+		return fmt.Sprintf("英文五点第%s条修复", idx), "gen_bullets_item_" + idx, true
 	case step == "description":
 		return "英文产品描述生成", "gen_description", true
 	case step == "search_terms":
@@ -280,7 +286,11 @@ func humanTranslateLabel(step string) (string, string, bool) {
 func humanStepLabel(step string) string {
 	switch {
 	case strings.HasPrefix(step, "bullets_item_"):
-		return "英文五点描述生成"
+		idx := strings.TrimSpace(strings.TrimPrefix(step, "bullets_item_"))
+		if idx == "" {
+			return "英文五点描述修复"
+		}
+		return fmt.Sprintf("英文五点第%s条修复", idx)
 	case strings.HasPrefix(step, "translate_bullet_"):
 		return "中文五点描述翻译"
 	case strings.HasPrefix(step, "description_"), strings.HasPrefix(step, "translate_description_"):

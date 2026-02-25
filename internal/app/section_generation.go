@@ -30,6 +30,32 @@ type sectionGenerateOptions struct {
 	Candidate     int
 }
 
+type sectionExecutionPolicy struct {
+	Protocol      string
+	Granularity   string
+	ItemJSONField string
+}
+
+func resolveSectionExecutionPolicy(rule config.SectionRuleFile) sectionExecutionPolicy {
+	return sectionExecutionPolicy{
+		Protocol:      strings.TrimSpace(strings.ToLower(rule.Parsed.Execution.Generation.Protocol)),
+		Granularity:   strings.TrimSpace(strings.ToLower(rule.Parsed.Execution.Repair.Granularity)),
+		ItemJSONField: strings.TrimSpace(rule.Parsed.Execution.Repair.ItemJSONField),
+	}
+}
+
+func (p sectionExecutionPolicy) useJSONLines() bool {
+	return p.Protocol == "json_lines"
+}
+
+func (p sectionExecutionPolicy) useItemRepair() bool {
+	return p.Granularity == "item"
+}
+
+func providerSupportsJSONMode(provider string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), "deepseek")
+}
+
 func generateDocumentBySections(opts sectionGenerateOptions) (ListingDocument, int64, error) {
 	doc := ListingDocument{
 		Keywords: append([]string{}, opts.Req.Keywords...),
@@ -49,8 +75,12 @@ func generateDocumentBySections(opts sectionGenerateOptions) (ListingDocument, i
 		return ListingDocument{}, total, err
 	}
 	var bullets []string
-	if strings.EqualFold(opts.Provider, "deepseek") {
-		items, itemLatency, itemErr := generateBulletsWithJSONAndRepair(opts, doc, bulletRule)
+	bulletPolicy := resolveSectionExecutionPolicy(bulletRule)
+	if bulletPolicy.useJSONLines() {
+		if !providerSupportsJSONMode(opts.Provider) {
+			return ListingDocument{}, total, fmt.Errorf("provider %s 不支持 json_lines 协议", opts.Provider)
+		}
+		items, itemLatency, itemErr := generateJSONLinesWithRepair(opts, "bullets", doc, bulletRule)
 		total += itemLatency
 		if itemErr != nil {
 			return ListingDocument{}, total, itemErr
@@ -102,6 +132,7 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 	)
 	lastIssues := ""
 	history := make([]llm.Message, 0, 6)
+	lengthIssue := false
 	err := withExponentialBackoff(retryOptions{
 		MaxRetries: opts.MaxRetries,
 		BaseDelay:  500 * time.Millisecond,
@@ -144,7 +175,7 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 			BaseURL:   opts.ProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
-		reqModel, thinkingFallback := resolveModelForAttempt(opts, attempt)
+		reqModel, thinkingFallback := resolveModelForAttempt(opts, sectionRule, attempt, lengthIssue)
 		reqEvent.Model = reqModel
 		if thinkingFallback {
 			opts.Logger.Emit(logging.Event{
@@ -215,11 +246,13 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 				llm.Message{Role: "assistant", Content: text},
 				llm.Message{Role: "user", Content: buildSectionRepairPrompt(step, issues)},
 			)
+			lengthIssue = containsLengthError(issues)
 			opts.Logger.Emit(logging.Event{Level: "warn", Event: "validate_error_" + step, Input: opts.Req.SourcePath, Candidate: opts.Candidate, Lang: opts.Lang, Attempt: attempt, Error: strings.Join(issues, "; ")})
 			return errors.New(strings.Join(issues, "; "))
 		}
 		outText = text
 		outLatency = resp.LatencyMS
+		lengthIssue = false
 		return nil
 	})
 	if err != nil {
@@ -232,10 +265,15 @@ func generateSectionWithRetry(opts sectionGenerateOptions, step string, doc List
 }
 
 func generateBulletsWithJSONAndRepair(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile) ([]string, int64, error) {
+	return generateJSONLinesWithRepair(opts, "bullets", doc, rule)
+}
+
+func generateJSONLinesWithRepair(opts sectionGenerateOptions, step string, doc ListingDocument, rule config.SectionRuleFile) ([]string, int64, error) {
 	expected := rule.Parsed.Output.Lines
 	if expected <= 0 {
-		return nil, 0, fmt.Errorf("bullets 规则 output.lines 无效：%d", expected)
+		return nil, 0, fmt.Errorf("%s 规则 output.lines 无效：%d", step, expected)
 	}
+	policy := resolveSectionExecutionPolicy(rule)
 	bounds := resolveCharBounds(
 		rule.Parsed.Constraints.MinCharsPerLine.Value,
 		rule.Parsed.Constraints.MaxCharsPerLine.Value,
@@ -243,13 +281,16 @@ func generateBulletsWithJSONAndRepair(opts sectionGenerateOptions, doc ListingDo
 	)
 	var total int64
 
-	out, latencyMS, err := generateBulletsBatchJSONWithRetry(opts, doc, rule, bounds)
+	out, latencyMS, err := generateJSONLinesBatchWithRetry(opts, step, doc, rule, bounds)
 	total += latencyMS
 	if err != nil {
 		return nil, total, err
 	}
 
-	invalidIndexes, issues, warnings := validateBulletSet(out, bounds)
+	for i := range out {
+		out[i] = normalizeLineByBounds(cleanBulletLine(out[i]), bounds, opts.Req.Keywords)
+	}
+	invalidIndexes, issues, warnings := validateLineSet(step, out, bounds)
 	for _, w := range warnings {
 		opts.Logger.Emit(logging.Event{
 			Level:     "warn",
@@ -261,10 +302,13 @@ func generateBulletsWithJSONAndRepair(opts sectionGenerateOptions, doc ListingDo
 		})
 	}
 	if len(issues) > 0 && len(invalidIndexes) == 0 {
-		return nil, total, fmt.Errorf("bullets 校验失败：%s", strings.Join(issues, "; "))
+		return nil, total, fmt.Errorf("%s 校验失败：%s", step, strings.Join(issues, "; "))
 	}
 	if len(invalidIndexes) == 0 {
 		return out, total, nil
+	}
+	if !policy.useItemRepair() {
+		return nil, total, fmt.Errorf("%s 校验失败：%s", step, strings.Join(issues, "; "))
 	}
 
 	snapshot := append([]string{}, out...)
@@ -280,7 +324,7 @@ func generateBulletsWithJSONAndRepair(opts sectionGenerateOptions, doc ListingDo
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			line, latency, itemErr := regenerateBulletItemJSONWithRetry(opts, doc, rule, idx, snapshot, bounds)
+			line, latency, itemErr := regenerateJSONLineItemWithRetry(opts, step, doc, rule, idx, snapshot, bounds, policy.ItemJSONField)
 			mu.Lock()
 			defer mu.Unlock()
 			repairSum += latency
@@ -299,9 +343,9 @@ func generateBulletsWithJSONAndRepair(opts sectionGenerateOptions, doc ListingDo
 		return nil, total, firstErr
 	}
 
-	_, finalIssues, _ := validateBulletSet(repaired, bounds)
+	_, finalIssues, _ := validateLineSet(step, repaired, bounds)
 	if len(finalIssues) > 0 {
-		return nil, total, fmt.Errorf("bullets 修复后仍不满足规则：%s", strings.Join(finalIssues, "; "))
+		return nil, total, fmt.Errorf("%s 修复后仍不满足规则：%s", step, strings.Join(finalIssues, "; "))
 	}
 	return repaired, total, nil
 }
@@ -318,20 +362,25 @@ type bulletItemJSON struct {
 }
 
 func generateBulletsBatchJSONWithRetry(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile, bounds charBounds) ([]string, int64, error) {
+	return generateJSONLinesBatchWithRetry(opts, "bullets", doc, rule, bounds)
+}
+
+func generateJSONLinesBatchWithRetry(opts sectionGenerateOptions, step string, doc ListingDocument, rule config.SectionRuleFile, bounds charBounds) ([]string, int64, error) {
 	expected := rule.Parsed.Output.Lines
 	var (
 		outItems   []string
 		outLatency int64
 	)
 	lastIssues := ""
+	lengthIssue := false
 	systemPrompt := buildSectionSystemPrompt(rule) + `
 
 【JSON协议】
 Return valid json only.
 必须只返回一个 json object，禁止 markdown 代码块、禁止解释。
-对象结构固定为：{"bullets":["line1","line2","line3","line4","line5"]}`
-	baseUserPrompt := buildSectionUserPrompt("bullets", opts.Req, doc) +
-		fmt.Sprintf("\n【输出要求】必须返回 json object，键名是 bullets，且 bullets 必须恰好 %d 条。", expected)
+对象中必须包含一个字符串数组字段，长度必须满足 output.lines。`
+	baseUserPrompt := buildSectionUserPrompt(step, opts.Req, doc) +
+		fmt.Sprintf("\n【输出要求】必须返回 json object，其中字符串数组字段长度必须恰好 %d。", expected)
 	history := make([]llm.Message, 0, 8)
 	err := withExponentialBackoff(retryOptions{
 		MaxRetries: opts.MaxRetries,
@@ -359,7 +408,7 @@ Return valid json only.
 		messages = append(messages, history...)
 
 		reqEvent := logging.Event{
-			Event:     "api_request_bullets",
+			Event:     "api_request_" + step,
 			Input:     opts.Req.SourcePath,
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
@@ -368,11 +417,11 @@ Return valid json only.
 			BaseURL:   opts.ProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
-		reqModel, thinkingFallback := resolveModelForAttempt(opts, attempt)
+		reqModel, thinkingFallback := resolveModelForAttempt(opts, rule, attempt, lengthIssue)
 		reqEvent.Model = reqModel
 		if thinkingFallback {
 			opts.Logger.Emit(logging.Event{
-				Event:     "thinking_fallback_bullets",
+				Event:     "thinking_fallback_" + step,
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
@@ -402,7 +451,7 @@ Return valid json only.
 			lastIssues = "- API 调用失败: " + err.Error()
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
-				Event:     "api_error_bullets",
+				Event:     "api_error_" + step,
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
@@ -413,7 +462,7 @@ Return valid json only.
 		}
 		text := normalizeModelText(resp.Text)
 		respEvent := logging.Event{
-			Event:     "api_response_bullets",
+			Event:     "api_response_" + step,
 			Input:     opts.Req.SourcePath,
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
@@ -427,24 +476,31 @@ Return valid json only.
 		}
 		opts.Logger.Emit(respEvent)
 
-		items, parseErr := parseBulletsFromJSON(text, expected)
+		items, parseErr := parseLinesFromJSON(text, expected)
 		if parseErr != nil {
-			lastIssues = "- JSON 解析失败: " + parseErr.Error()
+			parseErrText := parseErr.Error()
+			if step == "bullets" {
+				parseErrText = strings.ReplaceAll(parseErrText, "行数错误", "五点数量错误")
+			}
+			lastIssues = "- JSON 解析失败: " + parseErrText
 			history = append(history,
 				llm.Message{Role: "assistant", Content: text},
-				llm.Message{Role: "user", Content: buildJSONRepairPrompt(parseErr.Error(), `{"bullets":["..."]}`)},
+				llm.Message{Role: "user", Content: buildJSONRepairPrompt(parseErrText, `{"items":["..."]}`)},
 			)
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
-				Event:     "validate_error_bullets",
+				Event:     "validate_error_" + step,
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
 				Attempt:   attempt,
-				Error:     parseErr.Error(),
+				Error:     parseErrText,
 			})
+			lengthIssue = false
 			return errors.New(lastIssues)
 		}
+		_, lineIssues, _ := validateLineSet(step, items, bounds)
+		lengthIssue = containsLengthError(lineIssues)
 		outItems = items
 		outLatency = resp.LatencyMS
 		return nil
@@ -453,26 +509,43 @@ Return valid json only.
 		if strings.TrimSpace(lastIssues) == "" {
 			lastIssues = err.Error()
 		}
-		return nil, 0, fmt.Errorf("bullets 批量生成重试后仍失败: %s", lastIssues)
+		return nil, 0, fmt.Errorf("%s 批量生成重试后仍失败: %s", step, lastIssues)
 	}
 	return outItems, outLatency, nil
 }
 
 func regenerateBulletItemJSONWithRetry(opts sectionGenerateOptions, doc ListingDocument, rule config.SectionRuleFile, idx int, current []string, bounds charBounds) (string, int64, error) {
+	return regenerateJSONLineItemWithRetry(opts, "bullets", doc, rule, idx, current, bounds, "bullet")
+}
+
+func regenerateJSONLineItemWithRetry(opts sectionGenerateOptions, step string, doc ListingDocument, rule config.SectionRuleFile, idx int, current []string, bounds charBounds, itemField string) (string, int64, error) {
 	var (
 		outLine    string
 		outLatency int64
 	)
 	lastIssues := ""
+	lengthIssue := false
 	systemPrompt := buildSectionSystemPrompt(rule) + `
 
 【JSON协议】
 Return valid json only.
-必须只返回一个 json object：{"bullet":"..."}`
+必须只返回一个 json object，且对象中必须包含一个字符串字段。`
 	tmpDoc := doc
-	tmpDoc.BulletPoints = append([]string{}, current...)
-	baseUserPrompt := buildSectionUserPrompt("bullets", opts.Req, tmpDoc) +
-		fmt.Sprintf("\n【子任务】只修复第%d条，返回 json object：{\"bullet\":\"...\"}。", idx)
+	switch step {
+	case "bullets":
+		tmpDoc.BulletPoints = append([]string{}, current...)
+	}
+	if strings.TrimSpace(itemField) == "" {
+		itemField = "item"
+	}
+	baseUserPrompt := buildSectionUserPrompt(step, opts.Req, tmpDoc) +
+		fmt.Sprintf(
+			"\n【子任务】只修复第%d条，返回 json object，且仅包含一个字符串字段（键名=%s）。\n【硬约束】只返回一行文本，不得包含换行；文本长度必须落在规则区间 %s（容差区间 %s）。",
+			idx,
+			itemField,
+			bounds.ruleText(),
+			bounds.toleranceText(),
+		)
 	history := make([]llm.Message, 0, 8)
 	err := withExponentialBackoff(retryOptions{
 		MaxRetries: opts.MaxRetries,
@@ -482,7 +555,7 @@ Return valid json only.
 		OnRetry: func(attempt int, wait time.Duration, err error) {
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
-				Event:     fmt.Sprintf("retry_backoff_bullets_item_%d", idx),
+				Event:     fmt.Sprintf("retry_backoff_%s_item_%d", step, idx),
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
@@ -500,7 +573,7 @@ Return valid json only.
 		messages = append(messages, history...)
 
 		reqEvent := logging.Event{
-			Event:     fmt.Sprintf("api_request_bullets_item_%d", idx),
+			Event:     fmt.Sprintf("api_request_%s_item_%d", step, idx),
 			Input:     opts.Req.SourcePath,
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
@@ -509,11 +582,11 @@ Return valid json only.
 			BaseURL:   opts.ProviderCfg.BaseURL,
 			Attempt:   attempt,
 		}
-		reqModel, thinkingFallback := resolveModelForAttempt(opts, attempt)
+		reqModel, thinkingFallback := resolveModelForAttempt(opts, rule, attempt, lengthIssue)
 		reqEvent.Model = reqModel
 		if thinkingFallback {
 			opts.Logger.Emit(logging.Event{
-				Event:     fmt.Sprintf("thinking_fallback_bullets_item_%d", idx),
+				Event:     fmt.Sprintf("thinking_fallback_%s_item_%d", step, idx),
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
@@ -543,7 +616,7 @@ Return valid json only.
 			lastIssues = "- API 调用失败: " + err.Error()
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
-				Event:     fmt.Sprintf("api_error_bullets_item_%d", idx),
+				Event:     fmt.Sprintf("api_error_%s_item_%d", step, idx),
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
@@ -555,7 +628,7 @@ Return valid json only.
 
 		text := normalizeModelText(resp.Text)
 		respEvent := logging.Event{
-			Event:     fmt.Sprintf("api_response_bullets_item_%d", idx),
+			Event:     fmt.Sprintf("api_response_%s_item_%d", step, idx),
 			Input:     opts.Req.SourcePath,
 			Candidate: opts.Candidate,
 			Lang:      opts.Lang,
@@ -569,26 +642,28 @@ Return valid json only.
 		}
 		opts.Logger.Emit(respEvent)
 
-		line, parseErr := parseBulletItemFromJSON(text)
+		line, parseErr := parseLineItemFromJSON(text, itemField)
 		if parseErr != nil {
 			lastIssues = "- JSON 解析失败: " + parseErr.Error()
 			history = append(history,
 				llm.Message{Role: "assistant", Content: text},
-				llm.Message{Role: "user", Content: buildJSONRepairPrompt(parseErr.Error(), `{"bullet":"..."}`)},
+				llm.Message{Role: "user", Content: buildJSONRepairPrompt(parseErr.Error(), fmt.Sprintf("{\"%s\":\"...\"}", itemField))},
 			)
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
-				Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
+				Event:     fmt.Sprintf("validate_error_%s_item_%d", step, idx),
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
 				Attempt:   attempt,
 				Error:     parseErr.Error(),
 			})
+			lengthIssue = false
 			return errors.New(lastIssues)
 		}
+		line = normalizeLineByBounds(cleanBulletLine(line), bounds, opts.Req.Keywords)
 
-		issues, warnings := validateBulletLine(idx, line, bounds)
+		issues, warnings := validateLineItem(step, idx, line, bounds)
 		for _, w := range warnings {
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
@@ -604,38 +679,44 @@ Return valid json only.
 			lastIssues = "- " + strings.Join(issues, "\n- ")
 			history = append(history,
 				llm.Message{Role: "assistant", Content: text},
-				llm.Message{Role: "user", Content: buildJSONRepairPrompt(strings.Join(issues, "; "), `{"bullet":"..."}`)},
+				llm.Message{Role: "user", Content: buildJSONRepairPrompt(strings.Join(issues, "; "), fmt.Sprintf("{\"%s\":\"...\"}", itemField))},
 			)
 			opts.Logger.Emit(logging.Event{
 				Level:     "warn",
-				Event:     fmt.Sprintf("validate_error_bullets_item_%d", idx),
+				Event:     fmt.Sprintf("validate_error_%s_item_%d", step, idx),
 				Input:     opts.Req.SourcePath,
 				Candidate: opts.Candidate,
 				Lang:      opts.Lang,
 				Attempt:   attempt,
 				Error:     strings.Join(issues, "; "),
 			})
+			lengthIssue = containsLengthError(issues)
 			return errors.New(strings.Join(issues, "; "))
 		}
 		outLine = cleanBulletLine(line)
 		outLatency = resp.LatencyMS
+		lengthIssue = false
 		return nil
 	})
 	if err != nil {
 		if strings.TrimSpace(lastIssues) == "" {
 			lastIssues = err.Error()
 		}
-		return "", 0, fmt.Errorf("bullets 第%d条修复重试后仍失败: %s", idx, lastIssues)
+		return "", 0, fmt.Errorf("%s 第%d条修复重试后仍失败: %s", step, idx, lastIssues)
 	}
 	return outLine, outLatency, nil
 }
 
 func validateBulletSet(items []string, bounds charBounds) ([]int, []string, []string) {
+	return validateLineSet("bullets", items, bounds)
+}
+
+func validateLineSet(step string, items []string, bounds charBounds) ([]int, []string, []string) {
 	invalid := make([]int, 0, len(items))
 	issues := make([]string, 0, len(items))
 	warnings := make([]string, 0, len(items))
 	for i, it := range items {
-		lineIssues, lineWarnings := validateBulletLine(i+1, it, bounds)
+		lineIssues, lineWarnings := validateLineItem(step, i+1, it, bounds)
 		if len(lineIssues) > 0 {
 			invalid = append(invalid, i+1)
 			issues = append(issues, lineIssues...)
@@ -648,28 +729,45 @@ func validateBulletSet(items []string, bounds charBounds) ([]int, []string, []st
 }
 
 func validateBulletLine(idx int, raw string, bounds charBounds) ([]string, []string) {
+	return validateLineItem("bullets", idx, raw, bounds)
+}
+
+func validateLineItem(step string, idx int, raw string, bounds charBounds) ([]string, []string) {
 	issues := make([]string, 0, 3)
 	warnings := make([]string, 0, 1)
+	itemLabel := fmt.Sprintf("第%d行", idx)
+	if step == "bullets" {
+		itemLabel = fmt.Sprintf("第%d条", idx)
+	}
 	if countNonEmptyLines(raw) != 1 {
-		issues = append(issues, fmt.Sprintf("第%d条应为单行输出", idx))
+		issues = append(issues, fmt.Sprintf("%s应为单行输出", itemLabel))
 	}
 	line := cleanBulletLine(raw)
 	if strings.TrimSpace(line) == "" {
-		issues = append(issues, fmt.Sprintf("第%d条为空", idx))
+		issues = append(issues, fmt.Sprintf("%s为空", itemLabel))
 		return issues, warnings
 	}
 	n := runeLen(line)
 	if bounds.hasRule() && !bounds.inRule(n) {
 		if bounds.inTolerance(n) {
-			warnings = append(warnings, fmt.Sprintf("第%d条长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行", idx, n, bounds.ruleText(), bounds.toleranceText()))
+			warnings = append(warnings, fmt.Sprintf("%s长度 %d 未落入规则区间 %s，但落入容差区间 %s，已放行", itemLabel, n, bounds.ruleText(), bounds.toleranceText()))
 		} else {
-			issues = append(issues, fmt.Sprintf("第%d条长度超出容差区间：%d 不在 %s（规则区间 %s）", idx, n, bounds.toleranceText(), bounds.ruleText()))
+			issues = append(issues, fmt.Sprintf("%s长度超出容差区间：%d 不在 %s（规则区间 %s）", itemLabel, n, bounds.toleranceText(), bounds.ruleText()))
 		}
 	}
 	return issues, warnings
 }
 
 func parseBulletsFromJSON(text string, expected int) ([]string, error) {
+	items, err := parseLinesFromJSON(text, expected)
+	if err == nil {
+		return items, nil
+	}
+	msg := strings.ReplaceAll(err.Error(), "行数错误", "五点数量错误")
+	return nil, errors.New(msg)
+}
+
+func parseLinesFromJSON(text string, expected int) ([]string, error) {
 	var payload bulletsBatchJSON
 	if err := decodeJSONObject(text, &payload); err != nil {
 		return nil, err
@@ -678,14 +776,19 @@ func parseBulletsFromJSON(text string, expected int) ([]string, error) {
 	if len(items) == 0 {
 		items = payload.Items
 	}
+	if len(items) == 0 {
+		if alt, err := extractStringArrayFromJSONObject(text); err == nil {
+			items = alt
+		}
+	}
 	if len(items) != expected {
-		return nil, fmt.Errorf("五点数量错误：%d != %d", len(items), expected)
+		return nil, fmt.Errorf("行数错误：%d != %d", len(items), expected)
 	}
 	out := make([]string, 0, expected)
 	for i, it := range items {
 		clean := cleanBulletLine(it)
 		if strings.TrimSpace(clean) == "" {
-			return nil, fmt.Errorf("第%d条为空", i+1)
+			return nil, fmt.Errorf("第%d行为空", i+1)
 		}
 		out = append(out, clean)
 	}
@@ -693,11 +796,23 @@ func parseBulletsFromJSON(text string, expected int) ([]string, error) {
 }
 
 func parseBulletItemFromJSON(text string) (string, error) {
+	return parseLineItemFromJSON(text, "bullet")
+}
+
+func parseLineItemFromJSON(text string, itemField string) (string, error) {
 	var payload bulletItemJSON
 	if err := decodeJSONObject(text, &payload); err != nil {
 		return "", err
 	}
-	line := strings.TrimSpace(payload.Bullet)
+	line := ""
+	if strings.TrimSpace(itemField) != "" {
+		if v, err := extractStringByKeyFromJSONObject(text, itemField); err == nil {
+			line = strings.TrimSpace(v)
+		}
+	}
+	if line == "" {
+		line = strings.TrimSpace(payload.Bullet)
+	}
 	if line == "" {
 		line = strings.TrimSpace(payload.Text)
 	}
@@ -705,9 +820,96 @@ func parseBulletItemFromJSON(text string) (string, error) {
 		line = strings.TrimSpace(payload.Item)
 	}
 	if line == "" {
-		return "", fmt.Errorf("缺少 bullet 字段")
+		if alt, err := extractFirstStringOrArrayItemFromJSONObject(text); err == nil {
+			line = strings.TrimSpace(alt)
+		}
+	}
+	if line == "" {
+		if strings.TrimSpace(itemField) != "" {
+			return "", fmt.Errorf("缺少字符串字段（期望键名: %s）", itemField)
+		}
+		return "", fmt.Errorf("缺少字符串字段")
 	}
 	return line, nil
+}
+
+func extractStringByKeyFromJSONObject(text, key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", fmt.Errorf("key 为空")
+	}
+	raw := strings.TrimSpace(text)
+	obj := extractJSONObject(raw)
+	if strings.TrimSpace(obj) == "" {
+		obj = raw
+	}
+	m := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(obj), &m); err != nil {
+		return "", err
+	}
+	v, ok := m[key]
+	if !ok {
+		return "", fmt.Errorf("未找到键: %s", key)
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil && strings.TrimSpace(s) != "" {
+		return s, nil
+	}
+	var arr []string
+	if err := json.Unmarshal(v, &arr); err == nil {
+		for _, it := range arr {
+			if strings.TrimSpace(it) != "" {
+				return it, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("键 %s 对应值不是非空字符串", key)
+}
+
+func extractStringArrayFromJSONObject(text string) ([]string, error) {
+	raw := strings.TrimSpace(text)
+	obj := extractJSONObject(raw)
+	if strings.TrimSpace(obj) == "" {
+		obj = raw
+	}
+	m := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(obj), &m); err != nil {
+		return nil, err
+	}
+	for _, v := range m {
+		var arr []string
+		if err := json.Unmarshal(v, &arr); err == nil && len(arr) > 0 {
+			return arr, nil
+		}
+	}
+	return nil, fmt.Errorf("未找到字符串数组字段")
+}
+
+func extractFirstStringOrArrayItemFromJSONObject(text string) (string, error) {
+	raw := strings.TrimSpace(text)
+	obj := extractJSONObject(raw)
+	if strings.TrimSpace(obj) == "" {
+		obj = raw
+	}
+	m := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(obj), &m); err != nil {
+		return "", err
+	}
+	for _, v := range m {
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && strings.TrimSpace(s) != "" {
+			return s, nil
+		}
+		var arr []string
+		if err := json.Unmarshal(v, &arr); err == nil {
+			for _, it := range arr {
+				if strings.TrimSpace(it) != "" {
+					return it, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("未找到字符串字段")
 }
 
 func decodeJSONObject(raw string, out any) error {
@@ -809,16 +1011,9 @@ func buildSectionUserPrompt(step string, req listing.Requirement, doc ListingDoc
 }
 
 func buildSectionRepairPrompt(step string, issues []string) string {
-	label := step
-	switch step {
-	case "title":
-		label = "title"
-	case "bullets":
-		label = "bullet points"
-	case "description":
-		label = "product description"
-	case "search_terms":
-		label = "search terms"
+	label := strings.ReplaceAll(strings.TrimSpace(step), "_", " ")
+	if label == "" {
+		label = "section"
 	}
 	return fmt.Sprintf(
 		"上一版%s存在以下问题，必须逐条修复：\n- %s\n请基于上一版内容直接修复，并且只输出修复后的最终文本，不要解释。",
@@ -835,12 +1030,15 @@ func buildJSONRepairPrompt(issueText, schema string) string {
 	)
 }
 
-func resolveModelForAttempt(opts sectionGenerateOptions, attempt int) (string, bool) {
+func resolveModelForAttempt(opts sectionGenerateOptions, rule config.SectionRuleFile, attempt int, lengthIssue bool) (string, bool) {
 	model := strings.TrimSpace(opts.ProviderCfg.Model)
 	if model == "" {
 		model = "deepseek-chat"
 	}
 	if !strings.EqualFold(opts.Provider, "deepseek") {
+		return model, false
+	}
+	if lengthIssue && rule.Parsed.DisableThinkingFallbackOnLengthError() {
 		return model, false
 	}
 	fb := opts.ProviderCfg.ThinkingFallback
@@ -861,6 +1059,19 @@ func resolveModelForAttempt(opts sectionGenerateOptions, attempt int) (string, b
 		return model, false
 	}
 	return fallbackModel, true
+}
+
+func containsLengthError(issues []string) bool {
+	for _, s := range issues {
+		t := strings.TrimSpace(strings.ToLower(s))
+		if t == "" {
+			continue
+		}
+		if strings.Contains(t, "长度") || strings.Contains(t, "length") || strings.Contains(t, "char") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateSectionText(step, lang string, req listing.Requirement, text string, rule config.SectionRuleFile, tolerance int) ([]string, []string) {
@@ -1239,6 +1450,20 @@ func cleanSearchTermsLine(text string) string {
 func cleanBulletLine(text string) string {
 	line := normalizeSingleLine(text)
 	line = bulletPrefixRe.ReplaceAllString(line, "")
+	return strings.TrimSpace(line)
+}
+
+func normalizeLineByBounds(line string, bounds charBounds, keywords []string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || !bounds.hasRule() {
+		return line
+	}
+	if bounds.hasMax && bounds.tolMax > 0 && runeLen(line) > bounds.tolMax {
+		line = trimToMaxByWords(line, bounds.tolMax)
+	}
+	if bounds.hasMin && bounds.tolMin > 0 && runeLen(line) < bounds.tolMin {
+		line = padToMinByKeywords(line, bounds.tolMin, bounds.tolMax, keywords)
+	}
 	return strings.TrimSpace(line)
 }
 
